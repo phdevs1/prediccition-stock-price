@@ -108,6 +108,19 @@ def get_arch_cells(arch_type):
         arch_cells['normal_post'] = ['mconv_e3k5g0']
         arch_cells['up_post'] = ['mconv_e3k5g0']
         arch_cells['ar_nn'] = ['']
+    elif arch_type == 'mamba_enc':
+        # BI-Mamba: reemplaza las ops internas de normal_enc y normal_dec por MambaOp
+        # pre/post/down/up conservan las ops originales de res_mbconv
+        arch_cells = dict()
+        arch_cells['normal_enc'] = ['mamba_op', 'mamba_op']   # 2 nodos Mamba bidireccional
+        arch_cells['down_enc']   = ['res_bnswish', 'res_bnswish']
+        arch_cells['normal_dec'] = ['mamba_op']                # 1 nodo Mamba bidireccional
+        arch_cells['up_dec']     = ['mconv_e6k5g0']
+        arch_cells['normal_pre'] = ['res_bnswish', 'res_bnswish']
+        arch_cells['down_pre']   = ['res_bnswish', 'res_bnswish']
+        arch_cells['normal_post'] = ['mconv_e3k5g0']
+        arch_cells['up_post']    = ['mconv_e3k5g0']
+        arch_cells['ar_nn']      = ['']
     elif arch_type == 'res53_mbconv':
         arch_cells = dict()
         arch_cells['normal_enc'] = ['res_bnswish5', 'res_bnswish']

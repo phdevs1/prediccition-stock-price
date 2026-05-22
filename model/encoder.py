@@ -7,7 +7,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from .neural_operations import OPS, EncCombinerCell, DecCombinerCell, Conv2D, get_skip_connection
 from .utils import get_stride_for_cell_type, get_input_size, groups_per_scale, get_arch_cells
-from .cell_mamba import CellMamba
 
 
 class Cell(nn.Module):
@@ -114,7 +113,10 @@ class Encoder(nn.Module):
         self.num_preprocess_blocks = args.num_preprocess_blocks
         self.num_preprocess_cells = args.num_preprocess_cells
         self.num_channels_enc = args.num_channels_enc
-        self.arch_instance = get_arch_cells(args.arch_instance)
+        # Si use_bimamba=True se usa el arch_type 'mamba_enc' que tiene MambaOp
+        # en normal_enc y normal_dec en lugar de las ops convolucionales
+        arch_type = 'mamba_enc' if getattr(args, 'use_bimamba', False) else args.arch_instance
+        self.arch_instance = get_arch_cells(arch_type)
         self.stem = Conv2D(1, args.num_channels_enc, 3, padding=1, bias=True)
         self.num_latent_per_group = args.num_latent_per_group
 
@@ -179,11 +181,7 @@ class Encoder(nn.Module):
         for g in range(self.groups_per_scale):
             arch = self.arch_instance['normal_enc']
             num_c = int(self.num_channels_enc * mult)
-            # choose between BI-Mamba replacement or original Cell based on args.use_bimamba
-            if getattr(self.args, 'use_bimamba', False):
-                cell = CellMamba(num_c, num_c, cell_type='normal_enc', arch=arch, use_se=self.use_se, vocab_in=None)
-            else:
-                cell = Cell(num_c, num_c, cell_type='normal_enc', arch=arch, use_se=self.use_se)
+            cell = Cell(num_c, num_c, cell_type='normal_enc', arch=arch, use_se=self.use_se)
             enc_tower.append(cell)
 
             if not (g == self.groups_per_scale - 1):
@@ -196,19 +194,13 @@ class Encoder(nn.Module):
         return enc_tower
 
     def init_decoder_tower(self, mult):
-
         dec_tower = nn.ModuleList()
         for g in range(self.groups_per_scale):
             num_c = int(self.num_channels_dec * mult)
             if not (g == 0):
                 arch = self.arch_instance['normal_dec']
-                # choose between BI-Mamba replacement or original Cell based on args.use_bimamba
-                if getattr(self.args, 'use_bimamba', False):
-                    cell = CellMamba(num_c, num_c, cell_type='normal_dec', arch=arch, use_se=self.use_se, vocab_in=None)
-                else:
-                    cell = Cell(num_c, num_c, cell_type='normal_dec', arch=arch, use_se=self.use_se)
+                cell = Cell(num_c, num_c, cell_type='normal_dec', arch=arch, use_se=self.use_se)
                 dec_tower.append(cell)
-            #print(num_c)
             cell = DecCombinerCell(num_c, self.num_latent_per_group, num_c, cell_type='combiner_dec')
             dec_tower.append(cell)
         self.mult = mult

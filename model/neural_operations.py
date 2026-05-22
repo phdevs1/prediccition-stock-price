@@ -18,6 +18,8 @@ OPS = OrderedDict([
     ('mconv_e3k5g0', lambda Cin, Cout, stride: InvertedResidual(Cin, Cout, stride, ex=3, dil=1, k=5, g=1)),
     ('mconv_e3k5g8', lambda Cin, Cout, stride: InvertedResidual(Cin, Cout, stride, ex=3, dil=1, k=5, g=8)),
     ('mconv_e6k11g0', lambda Cin, Cout, stride: InvertedResidual(Cin, Cout, stride, ex=6, dil=1, k=11, g=0)),
+    # BI-Mamba drop-in: reemplaza cada op conv individual dentro de Cell
+    ('mamba_op', lambda Cin, Cout, stride: MambaOp(Cin, Cout)),
 ])
 
 
@@ -308,3 +310,130 @@ class InvertedResidual(nn.Module):
 
     def forward(self, x):
         return self.conv(x)
+
+
+class MambaOp(nn.Module):
+    """
+    Drop-in replacement for a single conv op inside Cell (e.g. BNSwishConv or InvertedResidual).
+
+    Recibe (B, C, H, W) igual que cualquier op en OPS.
+    Opera sobre el eje H (dimension temporal) tratando C como la dimension de embedding.
+    Aplica Mamba bidireccional: forward (H[0]→H[-1]) + backward (H[-1]→H[0]).
+    Devuelve (B, C, H, W) con el mismo shape.
+
+    Flujo interno:
+        (B, C, H, W)
+        → permute → (B, W, H, C)          # W posiciones tratadas en batch
+        → reshape  → (B*W, H, C)           # secuencia de largo H, embedding C
+        → Mamba_fwd(B*W, H, C)  +  Mamba_bwd(B*W, H, C) flipped
+        → suma + residual
+        → LayerNorm(C)
+        → FFN: Linear(C→C*2)→SiLU→Linear(C*2→C)
+        → LayerNorm(C)
+        → reshape → (B, W, H, C)
+        → permute → (B, C, H, W)
+    """
+
+    def __init__(self, Cin, Cout):
+        super().__init__()
+        # MambaOp solo soporta stride=1 (las ops normal_enc/normal_dec son stride=1)
+        # Si Cin != Cout necesitamos adaptar canales primero
+        self.adapt = nn.Identity() if Cin == Cout else nn.Conv2d(Cin, Cout, kernel_size=1, bias=False)
+        C = Cout
+
+        # Mamba SSM params — valores conservadores para caber en GPU pequeña
+        d_state = 4           # dimension del estado SSM
+        d_conv  = 3           # kernel causal
+        d_inner = max(C // 2, 8)  # sin expansion; d_inner < C para reducir memoria
+
+        # Forward SSM
+        self.fwd_in    = nn.Linear(C, d_inner * 2, bias=False)
+        self.fwd_conv  = nn.Conv1d(d_inner, d_inner, d_conv, padding=d_conv-1, groups=d_inner, bias=True)
+        self.fwd_xproj = nn.Linear(d_inner, 1 + d_state * 2, bias=False)
+        self.fwd_dt    = nn.Linear(1, d_inner, bias=True)
+        A_fwd = torch.arange(1, d_state + 1, dtype=torch.float).unsqueeze(0).expand(d_inner, -1)
+        self.fwd_A_log = nn.Parameter(torch.log(A_fwd))
+        self.fwd_D     = nn.Parameter(torch.ones(d_inner))
+        self.fwd_out   = nn.Linear(d_inner, C, bias=False)
+
+        # Backward SSM (pesos independientes)
+        self.bwd_in    = nn.Linear(C, d_inner * 2, bias=False)
+        self.bwd_conv  = nn.Conv1d(d_inner, d_inner, d_conv, padding=d_conv-1, groups=d_inner, bias=True)
+        self.bwd_xproj = nn.Linear(d_inner, 1 + d_state * 2, bias=False)
+        self.bwd_dt    = nn.Linear(1, d_inner, bias=True)
+        A_bwd = torch.arange(1, d_state + 1, dtype=torch.float).unsqueeze(0).expand(d_inner, -1)
+        self.bwd_A_log = nn.Parameter(torch.log(A_bwd))
+        self.bwd_D     = nn.Parameter(torch.ones(d_inner))
+        self.bwd_out   = nn.Linear(d_inner, C, bias=False)
+
+        # Post-processing
+        self.norm1 = nn.LayerNorm(C)
+        self.norm2 = nn.LayerNorm(C)
+        self.ffn   = nn.Sequential(
+            nn.Linear(C, C * 2),
+            nn.SiLU(),
+            nn.Linear(C * 2, C),
+        )
+
+    def _ssm_branch(self, x, in_proj, conv1d, xproj, dt_proj, A_log, D, out_proj):
+        """Aplica un brazo SSM sobre x: (BW, L, C) → (BW, L, C)."""
+        BW, L, C = x.shape
+        d_inner = in_proj.out_features // 2
+        d_state = (xproj.out_features - 1) // 2
+
+        # 1) proyeccion entrada
+        xz  = in_proj(x)                                  # (BW, L, d_inner*2)
+        xi, gate = xz.split(d_inner, dim=-1)
+
+        # 2) conv causal sobre L
+        xi = F.silu(conv1d(xi.transpose(1, 2))[..., :L].transpose(1, 2))  # (BW, L, d_inner)
+
+        # 3) SSM proyection: delta (1), B (d_state), C_ssm (d_state)
+        dBC   = xproj(xi)                                 # (BW, L, 1+2*d_state)
+        delta = F.softplus(dt_proj(dBC[..., :1]))         # (BW, L, d_inner)
+        B_ssm = dBC[..., 1:1+d_state]                    # (BW, L, d_state)
+        C_ssm = dBC[..., 1+d_state:]                     # (BW, L, d_state)
+
+        # 4) Selective scan discreto
+        A  = -torch.exp(A_log.float())                    # (d_inner, d_state)
+        dA = torch.exp(torch.einsum('bld,dn->bldn', delta, A))       # (BW,L,d_inner,d_state)
+        dBu = torch.einsum('bld,bln,bld->bldn', delta, B_ssm, xi)   # (BW,L,d_inner,d_state)
+
+        h = torch.zeros(BW, d_inner, d_state, device=x.device, dtype=x.dtype)
+        ys = []
+        for i in range(L):
+            h = dA[:, i] * h + dBu[:, i]
+            y = torch.einsum('bdn,bn->bd', h, C_ssm[:, i])
+            ys.append(y)
+        y = torch.stack(ys, dim=1)                        # (BW, L, d_inner)
+        y = y + xi * D
+
+        # 5) gate + salida
+        return out_proj(y * F.silu(gate))                 # (BW, L, C)
+
+    def forward(self, x):
+        """x: (B, C, H, W) → (B, C, H, W)"""
+        x = self.adapt(x)
+        B, C, H, W = x.shape
+
+        # (B, C, H, W) → (B*W, H, C): W como batch extra, H como secuencia, C como embedding
+        seq = x.permute(0, 3, 2, 1).reshape(B * W, H, C)
+
+        # brazo forward
+        y_fwd = self._ssm_branch(seq,
+            self.fwd_in, self.fwd_conv, self.fwd_xproj,
+            self.fwd_dt, self.fwd_A_log, self.fwd_D, self.fwd_out)
+
+        # brazo backward: invertir H, SSM, volver a invertir
+        y_bwd = self._ssm_branch(seq.flip(1),
+            self.bwd_in, self.bwd_conv, self.bwd_xproj,
+            self.bwd_dt, self.bwd_A_log, self.bwd_D, self.bwd_out).flip(1)
+
+        # combinar + residual + LayerNorm
+        y = self.norm1(y_fwd + y_bwd + seq)
+
+        # FFN + residual + LayerNorm
+        y = self.norm2(y + self.ffn(y))
+
+        # (B*W, H, C) → (B, W, H, C) → (B, C, H, W)
+        return y.reshape(B, W, H, C).permute(0, 3, 2, 1).contiguous()
