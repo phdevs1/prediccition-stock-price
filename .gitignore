@@ -1,7 +1,7 @@
 # Outputs from experiments
 results/
 checkpoints/
-SAMBA/
+
 
 # Dataset directories (often large; track only if you explicitly commit data)
 data/
