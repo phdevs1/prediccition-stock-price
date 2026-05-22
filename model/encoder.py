@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from .neural_operations import OPS, EncCombinerCell, DecCombinerCell, Conv2D, get_skip_connection
 from .utils import get_stride_for_cell_type, get_input_size, groups_per_scale, get_arch_cells
+from .cell_mamba import CellMamba
 
 
 class Cell(nn.Module):
@@ -104,6 +105,8 @@ def log_density_gaussian(sample, mu, logvar):
 class Encoder(nn.Module):
     def __init__(self, args):
         super(Encoder, self).__init__()
+        # keep args available to instance methods
+        self.args = args
 
         self.channel_mult = args.channel_mult
         self.mult = args.mult
@@ -176,7 +179,11 @@ class Encoder(nn.Module):
         for g in range(self.groups_per_scale):
             arch = self.arch_instance['normal_enc']
             num_c = int(self.num_channels_enc * mult)
-            cell = Cell(num_c, num_c, cell_type='normal_enc', arch=arch, use_se=self.use_se)
+            # choose between BI-Mamba replacement or original Cell based on args.use_bimamba
+            if getattr(self.args, 'use_bimamba', False):
+                cell = CellMamba(num_c, num_c, cell_type='normal_enc', arch=arch, use_se=self.use_se, vocab_in=None)
+            else:
+                cell = Cell(num_c, num_c, cell_type='normal_enc', arch=arch, use_se=self.use_se)
             enc_tower.append(cell)
 
             if not (g == self.groups_per_scale - 1):
@@ -195,7 +202,11 @@ class Encoder(nn.Module):
             num_c = int(self.num_channels_dec * mult)
             if not (g == 0):
                 arch = self.arch_instance['normal_dec']
-                cell = Cell(num_c, num_c, cell_type='normal_dec', arch=arch, use_se=self.use_se)
+                # choose between BI-Mamba replacement or original Cell based on args.use_bimamba
+                if getattr(self.args, 'use_bimamba', False):
+                    cell = CellMamba(num_c, num_c, cell_type='normal_dec', arch=arch, use_se=self.use_se, vocab_in=None)
+                else:
+                    cell = Cell(num_c, num_c, cell_type='normal_dec', arch=arch, use_se=self.use_se)
                 dec_tower.append(cell)
             #print(num_c)
             cell = DecCombinerCell(num_c, self.num_latent_per_group, num_c, cell_type='combiner_dec')

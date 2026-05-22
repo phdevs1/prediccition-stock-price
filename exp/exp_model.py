@@ -83,6 +83,25 @@ class Exp_Model(object):
         return criterion
 
     def vali(self, vali_data, vali_loader, criterion):
+        # Ensure pred_net lazy components (e.g. BIMambaWrapper.mamba) are initialized
+        # by doing one forward pass with a sample batch on the correct device.
+        try:
+            sample_iter = iter(vali_loader)
+            sample_batch = next(sample_iter)
+            batch_x_s, batch_y_s, batch_x_mark_s, batch_y_mark_s = sample_batch
+            batch_x_s = batch_x_s.float().to(self.device)
+            batch_x_mark_s = batch_x_mark_s.float().to(self.device)
+            with torch.no_grad():
+                # run a forward to lazily initialize modules inside pred_net
+                try:
+                    self.pred_net(batch_x_s, batch_x_mark_s)
+                except Exception:
+                    # If pred_net forward fails for any reason, ignore and proceed to copy;
+                    # copy_parameters may still work if both nets were initialized previously.
+                    pass
+        except Exception:
+            # if sampling fails, proceed; copy_parameters may still work
+            pass
         copy_parameters(self.denoise_net, self.pred_net)
         total_mse = []
         total_mae = []
