@@ -114,7 +114,7 @@ def get_arch_cells(arch_type):
         arch_cells = dict()
         arch_cells['normal_enc'] = ['mamba_op', 'mamba_op']   # 2 nodos Mamba bidireccional
         arch_cells['down_enc']   = ['res_bnswish', 'res_bnswish']
-        arch_cells['normal_dec'] = ['mamba_op']                # 1 nodo Mamba bidireccional
+        arch_cells['normal_dec'] = ['mamba_op', 'mamba_op', 'mamba_op']  # 3 nodos Mamba bidireccional
         arch_cells['up_dec']     = ['mconv_e6k5g0']
         arch_cells['normal_pre'] = ['res_bnswish', 'res_bnswish']
         arch_cells['down_pre']   = ['res_bnswish', 'res_bnswish']
