@@ -83,7 +83,6 @@ class Exp_Model(object):
         return criterion
 
     def vali(self, vali_data, vali_loader, criterion):
-        # Ensure pred_net lazy components (e.g. BIMambaWrapper.mamba) are initialized
         # by doing one forward pass with a sample batch on the correct device.
         try:
             sample_iter = iter(vali_loader)
