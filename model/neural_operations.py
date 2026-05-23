@@ -344,7 +344,7 @@ class MambaOp(nn.Module):
         # Mamba SSM params — valores conservadores para caber en GPU pequeña
         d_state = 16           # dimension del estado SSM
         d_conv  = 4           # kernel causal
-        d_inner = max(C, 16)  # sin expansion; d_inner < C para reducir memoria
+        d_inner = max(C, 16)  # dimension interna del bloque Mamba (conv1d + SSM)
 
         # Forward SSM
         self.fwd_in    = nn.Linear(C, d_inner * 2, bias=False)
