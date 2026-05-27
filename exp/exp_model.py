@@ -119,7 +119,6 @@ class Exp_Model(object):
     def train(self, setting):
         train_data, train_loader = self._get_data(flag = 'train')
         vali_data, vali_loader = self._get_data(flag = 'val')
-        test_data, test_loader = self._get_data(flag = 'test')
         train_steps = len(train_loader)
         path = os.path.join(self.args.checkpoints, setting)
         if not os.path.exists(path):
