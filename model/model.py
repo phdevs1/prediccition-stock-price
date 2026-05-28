@@ -47,7 +47,9 @@ class denoise_net(nn.Module):
         super().__init__()
 
         # ResNet that used to calculate the scores.
-        self.score_net = Res12_Quadratic(1, 64, 32, normalize=False, AF=nn.ELU())
+        # h = prediction_length, w = target_dim (shape of the tensor fed to score_net is (B,1,pred_len,target_dim))
+        self.score_net = Res12_Quadratic(1, 64, 32, normalize=False, AF=nn.ELU(),
+                                         h=args.prediction_length, w=args.target_dim)
 
         # Generate the diffusion schedule.
         sigmas = get_beta_schedule(args.beta_schedule, args.beta_start, args.beta_end, args.diff_steps)
