@@ -83,6 +83,24 @@ class Exp_Model(object):
         return criterion
 
     def vali(self, vali_data, vali_loader, criterion):
+        # by doing one forward pass with a sample batch on the correct device.
+        try:
+            sample_iter = iter(vali_loader)
+            sample_batch = next(sample_iter)
+            batch_x_s, batch_y_s, batch_x_mark_s, batch_y_mark_s = sample_batch
+            batch_x_s = batch_x_s.float().to(self.device)
+            batch_x_mark_s = batch_x_mark_s.float().to(self.device)
+            with torch.no_grad():
+                # run a forward to lazily initialize modules inside pred_net
+                try:
+                    self.pred_net(batch_x_s, batch_x_mark_s)
+                except Exception:
+                    # If pred_net forward fails for any reason, ignore and proceed to copy;
+                    # copy_parameters may still work if both nets were initialized previously.
+                    pass
+        except Exception:
+            # if sampling fails, proceed; copy_parameters may still work
+            pass
         copy_parameters(self.denoise_net, self.pred_net)
         total_mse = []
         total_mae = []
@@ -101,7 +119,6 @@ class Exp_Model(object):
     def train(self, setting):
         train_data, train_loader = self._get_data(flag = 'train')
         vali_data, vali_loader = self._get_data(flag = 'val')
-        test_data, test_loader = self._get_data(flag = 'test')
         train_steps = len(train_loader)
         path = os.path.join(self.args.checkpoints, setting)
         if not os.path.exists(path):

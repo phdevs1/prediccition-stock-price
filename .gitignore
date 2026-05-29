@@ -54,3 +54,5 @@ htmlcov/
 
 # macOS
 .DS_Store
+
+idea/
