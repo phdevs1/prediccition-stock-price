@@ -165,9 +165,9 @@ class Exp_Model(object):
             print("Epoch: {0}, Steps: {1} | MSE Loss: {2:.7f} KL Loss: {3:.7f} DSM Loss: {4:.7f} Overall Loss:{5:.7f}".format(
                 epoch + 1, train_steps, mse, kl, dsm, all_loss))
             early_stopping(vali_mse, self.denoise_net, path)
-            if early_stopping.early_stop:
-                print("Early stopping")
-                break
+            # if early_stopping.early_stop:
+            #     print("Early stopping")
+            #     break
             adjust_learning_rate(denoise_optim, epoch+1, self.args)
         best_model_path = path+'/'+'checkpoint.pth'
         self.denoise_net.load_state_dict(torch.load(best_model_path))
