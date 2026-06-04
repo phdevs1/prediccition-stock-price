@@ -117,35 +117,45 @@ class ResidualBlock(nn.Module):
 
 
 class Res12_Quadratic(nn.Module):
-    def __init__(self,inchan,dim,hw,normalize=False,AF=None):
+    def __init__(self, inchan, dim, hw, normalize=False, AF=None, h=None, w=None):
+        """
+        inchan : input channels (1 for score network)
+        dim    : base channel width (64 by default)
+        hw     : legacy square-image side length (ignored when h/w are provided)
+        h, w   : actual spatial height and width of the input tensor (pred_len, target_dim)
+        """
         super(Res12_Quadratic, self).__init__()
 
-        self.hw = hw
+        # Determine actual spatial dims
+        self.h = h if h is not None else hw
+        self.w = w if w is not None else hw
         self.dim = dim
         self.inchan = inchan
-        self.conv1 = MyConvo2d(inchan,dim, 3)
-        self.rb1 = ResidualBlock(dim, 2*dim, 3, int(hw), resample = 'down',normalize=normalize,AF=AF)
-        self.rbc1 = ResidualBlock(2*dim, 2*dim, 3, int(hw/2), resample = 'none',normalize=normalize,AF=AF)
-        self.rb2 = ResidualBlock(2*dim, 4*dim, 3, int(hw/2), resample = 'down',normalize=normalize,AF=AF)
-        self.rbc2 = ResidualBlock(4*dim, 4*dim, 3, int(hw/4), resample = 'none',normalize=normalize,AF=AF)
-        self.rb3 = ResidualBlock(4*dim, 8*dim, 3, int(hw/4), resample = 'down',normalize=normalize,AF=AF)
-        self.rbc3 = ResidualBlock(8*dim, 8*dim, 3, int(hw/8), resample = 'none',normalize=normalize,AF=AF)
-        self.ln1 = nn.Linear(int(hw/8)*int(hw/8)*8*dim, 1)
-        self.ln2 = nn.Linear(int(hw/8)*int(hw/8)*8*dim, 1)
-        self.lq = nn.Linear(int(hw/8)*int(hw/8)*8*dim, 1)
+        self.conv1 = MyConvo2d(inchan, dim, 3)
+        self.rb1  = ResidualBlock(dim,    2*dim, 3, self.h,   resample='down', normalize=normalize, AF=AF)
+        self.rbc1 = ResidualBlock(2*dim,  2*dim, 3, self.h,   resample='none', normalize=normalize, AF=AF)
+        self.rb2  = ResidualBlock(2*dim,  4*dim, 3, self.h,   resample='down', normalize=normalize, AF=AF)
+        self.rbc2 = ResidualBlock(4*dim,  4*dim, 3, self.h,   resample='none', normalize=normalize, AF=AF)
+        self.rb3  = ResidualBlock(4*dim,  8*dim, 3, self.h,   resample='down', normalize=normalize, AF=AF)
+        self.rbc3 = ResidualBlock(8*dim,  8*dim, 3, self.h,   resample='none', normalize=normalize, AF=AF)
+        # Flatten size: all convolutions keep spatial dims (stride=1, same padding), so output is (B, 8*dim, h, w)
+        flat_size = self.h * self.w * 8 * dim
+        self.ln1 = nn.Linear(flat_size, 1)
+        self.ln2 = nn.Linear(flat_size, 1)
+        self.lq  = nn.Linear(flat_size, 1)
         self.Square = Square()
 
     def forward(self, x_in):
         output = x_in
         output = self.conv1(output)
-        # print(output.shape)
         output = self.rb1(output)
         output = self.rbc1(output)
         output = self.rb2(output)
         output = self.rbc2(output)
         output = self.rb3(output)
         output = self.rbc3(output)
-        output = output.view(-1, int(self.hw/8)*int(self.hw/8)*8*self.dim)
-        output = self.ln1(output)*self.ln2(output)+self.lq(self.Square(output))
+        flat_size = output.shape[1] * output.shape[2] * output.shape[3]
+        output = output.view(-1, flat_size)
+        output = self.ln1(output) * self.ln2(output) + self.lq(self.Square(output))
         output = output.view(-1)
         return output

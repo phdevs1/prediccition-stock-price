@@ -58,8 +58,9 @@ parser.add_argument('--zeta', type=float, default=0.5, help='trade off parameter
 parser.add_argument('--eta', type=float, default=1.0, help='trade off parameter eta')
 
 # Device
-parser.add_argument('--use_gpu', type=bool, default=True, help='use gpu')
+parser.add_argument('--use_gpu', action='store_true', help='use gpu')
 parser.add_argument('--gpu', type=int, default=0, help='gpu')
+parser.add_argument('--use_bimamba', action='store_true', help='Use BI-Mamba CellMamba cells instead of original Cell')
 
 args = parser.parse_args()
 args.use_gpu = True if torch.cuda.is_available() and args.use_gpu else False

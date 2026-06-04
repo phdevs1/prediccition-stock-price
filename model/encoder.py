@@ -5,7 +5,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .neural_operations import OPS, EncCombinerCell, DecCombinerCell, Conv2D, get_skip_connection
+from .neural_operations import OPS, EncCombinerCell, DecCombinerCell, Conv2D, get_skip_connection, MambaOp
 from .utils import get_stride_for_cell_type, get_input_size, groups_per_scale, get_arch_cells
 
 
@@ -33,7 +33,9 @@ class Cell(nn.Module):
         skip = self.skip(s)
         for i in range(self._num_nodes):
             s = self._ops[i](s)
-        return skip + 0.1 * s
+        scale = 1.0 if all(isinstance(op, MambaOp) for op in self._ops) else 0.1
+        return skip + scale * s
+
 
 
 def soft_clamp5(x: torch.Tensor):
@@ -104,6 +106,8 @@ def log_density_gaussian(sample, mu, logvar):
 class Encoder(nn.Module):
     def __init__(self, args):
         super(Encoder, self).__init__()
+        # keep args available to instance methods
+        self.args = args
 
         self.channel_mult = args.channel_mult
         self.mult = args.mult
@@ -111,7 +115,10 @@ class Encoder(nn.Module):
         self.num_preprocess_blocks = args.num_preprocess_blocks
         self.num_preprocess_cells = args.num_preprocess_cells
         self.num_channels_enc = args.num_channels_enc
-        self.arch_instance = get_arch_cells(args.arch_instance)
+        # Si use_bimamba=True se usa el arch_type 'mamba_enc' que tiene MambaOp
+        # en normal_enc y normal_dec en lugar de las ops convolucionales
+        arch_type = 'mamba_enc' if getattr(args, 'use_bimamba', False) else args.arch_instance
+        self.arch_instance = get_arch_cells(arch_type)
         self.stem = Conv2D(1, args.num_channels_enc, 3, padding=1, bias=True)
         self.num_latent_per_group = args.num_latent_per_group
 
@@ -189,7 +196,6 @@ class Encoder(nn.Module):
         return enc_tower
 
     def init_decoder_tower(self, mult):
-
         dec_tower = nn.ModuleList()
         for g in range(self.groups_per_scale):
             num_c = int(self.num_channels_dec * mult)
@@ -197,7 +203,6 @@ class Encoder(nn.Module):
                 arch = self.arch_instance['normal_dec']
                 cell = Cell(num_c, num_c, cell_type='normal_dec', arch=arch, use_se=self.use_se)
                 dec_tower.append(cell)
-            #print(num_c)
             cell = DecCombinerCell(num_c, self.num_latent_per_group, num_c, cell_type='combiner_dec')
             dec_tower.append(cell)
         self.mult = mult
