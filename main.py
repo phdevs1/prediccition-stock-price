@@ -24,13 +24,8 @@ parser.add_argument('--input_dim', type=int, default=6, help='dimension of input
 parser.add_argument('--hidden_size', type=int, default=128, help='encoder dimension')
 parser.add_argument('--embedding_dimension', type=int, default=64, help='feature embedding dimension')
 
-# Diffusion process
-parser.add_argument('--diff_steps', type=int, default=1000, help='number of the diff step')
+# Model
 parser.add_argument('--dropout_rate', type=float, default=0.1, help='dropout')
-parser.add_argument('--beta_schedule', type=str, default='linear', help='the schedule of beta')
-parser.add_argument('--beta_start', type=float, default=0.0, help='start of the beta')
-parser.add_argument('--beta_end', type=float, default=1.0, help='end of the beta')
-parser.add_argument('--scale', type=float, default=0.1, help='adjust diffusion scale')
 
 # Bidirectional VAE
 parser.add_argument('--arch_instance', type=str, default='res_mbconv', help='path to the architecture instance')
@@ -55,7 +50,6 @@ parser.add_argument('--batch_size', type=int, default=16, help='batch size of tr
 parser.add_argument('--learning_rate', type=float, default=0.0005, help='optimizer learning rate')
 parser.add_argument('--weight_decay', type=float, default=0.0000, help='weight decay')
 parser.add_argument('--zeta', type=float, default=0.5, help='trade off parameter zeta')
-parser.add_argument('--eta', type=float, default=1.0, help='trade off parameter eta')
 
 # Device
 parser.add_argument('--use_gpu', action='store_true', help='use gpu')
