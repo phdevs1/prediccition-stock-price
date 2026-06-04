@@ -5,7 +5,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .neural_operations import OPS, EncCombinerCell, DecCombinerCell, Conv2D, get_skip_connection, MambaOp
+from .neural_operations import OPS, EncCombinerCell, DecCombinerCell, Conv2D, get_skip_connection
 from .utils import get_stride_for_cell_type, get_input_size, groups_per_scale, get_arch_cells
 
 
@@ -33,8 +33,7 @@ class Cell(nn.Module):
         skip = self.skip(s)
         for i in range(self._num_nodes):
             s = self._ops[i](s)
-        scale = 1.0 if all(isinstance(op, MambaOp) for op in self._ops) else 0.1
-        return skip + scale * s
+        return skip + 0.1 * s
 
 
 
@@ -115,10 +114,7 @@ class Encoder(nn.Module):
         self.num_preprocess_blocks = args.num_preprocess_blocks
         self.num_preprocess_cells = args.num_preprocess_cells
         self.num_channels_enc = args.num_channels_enc
-        # Si use_bimamba=True se usa el arch_type 'mamba_enc' que tiene MambaOp
-        # en normal_enc y normal_dec en lugar de las ops convolucionales
-        arch_type = 'mamba_enc' if getattr(args, 'use_bimamba', False) else args.arch_instance
-        self.arch_instance = get_arch_cells(arch_type)
+        self.arch_instance = get_arch_cells(args.arch_instance)
         self.stem = Conv2D(1, args.num_channels_enc, 3, padding=1, bias=True)
         self.num_latent_per_group = args.num_latent_per_group
 
