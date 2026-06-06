@@ -3,7 +3,7 @@ import os
 import pandas as pd
 
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 from utils.timefeatures import time_features
 import warnings
 warnings.filterwarnings('ignore')

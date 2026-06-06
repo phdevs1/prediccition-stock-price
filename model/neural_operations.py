@@ -7,7 +7,6 @@ from collections import OrderedDict
 
 
 BN_EPS = 1e-5
-SYNC_BN = False
 
 OPS = OrderedDict([
     ('res_bnswish', lambda Cin, Cout, stride: BNSwishConv(Cin, Cout, 3, stride, 1)),
@@ -74,7 +73,7 @@ def normalize_weight_jit(log_weight_norm, weight):
 class Conv2D(nn.Conv2d):
     """Allows for weights as input."""
 
-    def __init__(self, C_in, C_out, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=False, data_init=False,
+    def __init__(self, C_in, C_out, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=False,
                  weight_norm=True):
         """
         Args:
@@ -87,8 +86,6 @@ class Conv2D(nn.Conv2d):
             init = norm(self.weight, dim=[1, 2, 3]).view(-1, 1, 1, 1)
             self.log_weight_norm = nn.Parameter(torch.log(init + 1e-2), requires_grad=True)
 
-        self.data_init = data_init
-        self.init_done = False
         self.weight_normalized = self.normalize_weight()
 
     def forward(self, x):
@@ -209,21 +206,6 @@ class ConvBNSwish(nn.Module):
 
     def forward(self, x):
         return self.conv(x)
-
-
-class SE(nn.Module):
-    def __init__(self, Cin, Cout):
-        super(SE, self).__init__()
-        num_hidden = max(Cout // 16, 4)
-        self.se = nn.Sequential(nn.Linear(Cin, num_hidden), nn.ReLU(inplace=True),
-                                nn.Linear(num_hidden, Cout), nn.Sigmoid())
-
-    def forward(self, x):
-        se = torch.mean(x, dim=[2, 3])
-        se = se.view(se.size(0), -1)
-        se = self.se(se)
-        se = se.view(se.size(0), -1, 1, 1)
-        return x * se
 
 
 class InvertedResidual(nn.Module):

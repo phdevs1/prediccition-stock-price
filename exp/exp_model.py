@@ -12,7 +12,6 @@ from torch import optim
 from torch.utils.data import DataLoader
 
 import os
-import time
 import warnings
 
 
@@ -93,7 +92,6 @@ class Exp_Model(object):
             pass
         copy_parameters(self.denoise_net, self.pred_net)
         total_mse = []
-        total_mae = []
 
         for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(vali_loader):
             batch_x = batch_x.float().to(self.device)
@@ -116,7 +114,6 @@ class Exp_Model(object):
         early_stopping = EarlyStopping(patience=self.args.patience, verbose=True)
         denoise_optim = self._select_optimizer()
         criterion =  self._select_criterion()
-        train = []
 
         for epoch in range(self.args.train_epochs):
             mse = []
@@ -124,7 +121,6 @@ class Exp_Model(object):
             dsm = []
             all_loss = []
             self.denoise_net.train()
-            epoch_time = time.time()
             for i, (batch_x, batch_y, x_mark, y_mark) in enumerate(train_loader):
                 t = torch.randint(0, self.diff_step, (self.args.batch_size,)).long().to(self.device)
                 batch_x = batch_x.float().to(self.device)
@@ -146,7 +142,6 @@ class Exp_Model(object):
                 if i%40==0:
                     print(loss)
             all_loss = np.average(all_loss)
-            train.append(all_loss)
             kl = np.average(kl)
             dsm = np.average(dsm)
             mse = np.average(mse)

@@ -1,18 +1,4 @@
 # -*-Encoding: utf-8 -*-
-import logging
-import os
-import shutil
-import time
-from datetime import timedelta
-import sys
-
-import torch
-import torch.nn as nn
-import numpy as np
-import torch.distributed as dist
-
-import torch.nn.functional as F
-
 
 def get_stride_for_cell_type(cell_type):
     if cell_type.startswith('normal') or cell_type.startswith('combiner'):

@@ -1,7 +1,6 @@
 # -*-Encoding: utf-8 -*-
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import numpy as np
 from .resnet import Res12_Quadratic
 from .diffusion_process import GaussianDiffusion, get_beta_schedule
@@ -12,13 +11,8 @@ from .embedding import DataEmbedding
 class diffusion_generate(nn.Module):
     def __init__(self, args):
         super().__init__()
-        self.target_dim = args.target_dim
-        self.input_size = args.embedding_dimension
-        self.prediction_length = args.prediction_length
-        self.seq_length = args.sequence_length
-        self.scale = args.scale
         self.rnn = nn.GRU(
-            input_size=self.input_size,
+            input_size=args.embedding_dimension,
             hidden_size=args.hidden_size,
             num_layers=args.num_layers,
             dropout=args.dropout_rate,
@@ -27,7 +21,6 @@ class diffusion_generate(nn.Module):
         self.generative = Encoder(args)
         self.diffusion = GaussianDiffusion(
             self.generative,
-            input_size=args.target_dim,
             diff_steps=args.diff_steps,
             beta_end=args.beta_end,
             beta_schedule=args.beta_schedule,
@@ -54,10 +47,7 @@ class denoise_net(nn.Module):
         # Generate the diffusion schedule.
         sigmas = get_beta_schedule(args.beta_schedule, args.beta_start, args.beta_end, args.diff_steps)
         alphas = 1.0 - sigmas*0.5
-        self.alphas_cumprod = torch.tensor(np.cumprod(alphas, axis=0))
-        self.sqrt_alphas_cumprod = torch.tensor(np.sqrt(np.cumprod(alphas, axis=0)))
-        self.sqrt_one_minus_alphas_cumprod = torch.tensor(np.sqrt(1-np.cumprod(alphas, axis=0)))
-        self.sigmas = torch.tensor(1. - self.alphas_cumprod)
+        self.sigmas = torch.tensor(1. - np.cumprod(alphas, axis=0))
 
         # The generative bvae model.
         self.diffusion_gen = diffusion_generate(args)
