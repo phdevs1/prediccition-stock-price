@@ -5,18 +5,11 @@ from functools import partial
 from inspect import isfunction
 import torch.nn as nn
 import torch.nn.functional as F
-from .resnet import Res12_Quadratic
 
 
 def get_beta_schedule(beta_schedule, beta_start, beta_end, num_diffusion_timesteps):
-    if beta_schedule == 'quad':
-      betas = np.linspace(beta_start ** 0.5, beta_end ** 0.5, num_diffusion_timesteps, dtype=np.float64) ** 2
-    elif beta_schedule == 'linear':
+    if beta_schedule == 'linear':
       betas = np.linspace(beta_start, beta_end, num_diffusion_timesteps, dtype=np.float64)
-    elif beta_schedule == 'const':
-      betas = beta_end * np.ones(num_diffusion_timesteps, dtype=np.float64)
-    elif beta_schedule == 'jsd':  # 1/T, 1/(T-1), 1/(T-2), ..., 1
-      betas = 1. / np.linspace(num_diffusion_timesteps, 1, num_diffusion_timesteps, dtype=np.float64)
     else:
       raise NotImplementedError(beta_schedule)
     assert betas.shape == (num_diffusion_timesteps,)
@@ -30,19 +23,9 @@ def default(val, d):
 
 
 def extract(a, t, x_shape):
-    #print(a.shape, t.shape)
     b, *_ = t.shape
     out = a.gather(-1, t)
-    #print(out.shape)
     return out.reshape(b, *((1,) * (len(x_shape) - 1)))
-
-
-def noise_like(shape, device, repeat=False):
-    repeat_noise = lambda: torch.randn((1, *shape[1:]), device=device).repeat(
-        shape[0], *((1,) * (len(shape) - 1))
-    )
-    noise = lambda: torch.randn(shape, device=device)
-    return repeat_noise() if repeat else noise()
 
 
 class GaussianDiffusion(nn.Module):

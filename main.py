@@ -33,7 +33,6 @@ parser.add_argument('--beta_end', type=float, default=1.0, help='end of the beta
 parser.add_argument('--scale', type=float, default=0.1, help='adjust diffusion scale')
 
 # Bidirectional VAE
-parser.add_argument('--arch_instance', type=str, default='res_mbconv', help='path to the architecture instance')
 parser.add_argument('--mult', type=float, default=1, help='mult of channels')
 parser.add_argument('--num_layers', type=int, default=2, help='num of RNN layers')
 parser.add_argument('--num_channels_enc', type=int, default=32, help='number of channels in encoder')

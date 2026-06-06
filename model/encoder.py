@@ -1,12 +1,11 @@
 # -*-Encoding: utf-8 -*-
 import time
-import math
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .neural_operations import OPS, EncCombinerCell, DecCombinerCell, Conv2D, get_skip_connection, MambaOp
-from .utils import get_stride_for_cell_type, get_input_size, groups_per_scale, get_arch_cells
+from .utils import get_stride_for_cell_type, get_arch_cells
 
 
 class Cell(nn.Module):
@@ -92,16 +91,6 @@ class NormalDecoder:
         return x
 
 
-def log_density_gaussian(sample, mu, logvar):
-    normalization = - 0.5 * (math.log(2 * math.pi) + logvar)
-    inv_var = torch.exp(-logvar)
-    log_density = normalization - 0.5 * ((sample - mu)**2 * inv_var)
-    log_qz = torch.logsumexp(torch.sum(log_density, [2,3]), dim=1, keepdim=False)
-    log_prod_qzi = torch.logsumexp(log_density, dim=1, keepdim=False).sum((1,2))
-    loss_p_z = (log_qz - log_prod_qzi)
-    loss_p_z = ((loss_p_z - torch.min(loss_p_z))/(torch.max(loss_p_z)-torch.min(loss_p_z))).mean()
-    return loss_p_z
-
 
 class Encoder(nn.Module):
     def __init__(self, args):
@@ -117,7 +106,7 @@ class Encoder(nn.Module):
         self.num_channels_enc = args.num_channels_enc
         # Si use_bimamba=True se usa el arch_type 'mamba_enc' que tiene MambaOp
         # en normal_enc y normal_dec en lugar de las ops convolucionales
-        arch_type = 'mamba_enc' if getattr(args, 'use_bimamba', False) else args.arch_instance
+        arch_type = 'mamba_enc' if getattr(args, 'use_bimamba', False) else 'res_mbconv'
         self.arch_instance = get_arch_cells(arch_type)
         self.stem = Conv2D(1, args.num_channels_enc, 3, padding=1, bias=True)
         self.num_latent_per_group = args.num_latent_per_group

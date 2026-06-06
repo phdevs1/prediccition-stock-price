@@ -10,14 +10,9 @@ BN_EPS = 1e-5
 SYNC_BN = False
 
 OPS = OrderedDict([
-    ('res_elu', lambda Cin, Cout, stride: ELUConv(Cin, Cout, 3, stride, 1)),
-    ('res_bnelu', lambda Cin, Cout, stride: BNELUConv(Cin, Cout, 3, stride, 1)),
     ('res_bnswish', lambda Cin, Cout, stride: BNSwishConv(Cin, Cout, 3, stride, 1)),
-    ('res_bnswish5', lambda Cin, Cout, stride: BNSwishConv(Cin, Cout, 3, stride, 2, 2)),
     ('mconv_e6k5g0', lambda Cin, Cout, stride: InvertedResidual(Cin, Cout, stride, ex=6, dil=1, k=5, g=0)),
     ('mconv_e3k5g0', lambda Cin, Cout, stride: InvertedResidual(Cin, Cout, stride, ex=3, dil=1, k=5, g=1)),
-    ('mconv_e3k5g8', lambda Cin, Cout, stride: InvertedResidual(Cin, Cout, stride, ex=3, dil=1, k=5, g=8)),
-    ('mconv_e6k11g0', lambda Cin, Cout, stride: InvertedResidual(Cin, Cout, stride, ex=6, dil=1, k=11, g=0)),
     # BI-Mamba drop-in: reemplaza cada op conv individual dentro de Cell
     ('mamba_op', lambda Cin, Cout, stride: MambaOp(Cin, Cout)),
 ])
@@ -52,10 +47,6 @@ def norm(t, dim):
     return torch.sqrt(torch.sum(t * t, dim))
 
 
-def logit(t):
-    return torch.log(t) - torch.log(1 - t)
-
-
 def act(t):
     # The following implementation has lower memory.
     return SwishFN.apply(t)
@@ -71,14 +62,6 @@ class SwishFN(torch.autograd.Function):
         i = ctx.saved_variables[0]
         sigmoid_i = torch.sigmoid(i)
         return grad_output * (sigmoid_i * (1 + i * (1 - sigmoid_i)))
-
-
-class Swish(nn.Module):
-    def __init__(self):
-        super(Swish, self).__init__()
-
-    def forward(self, x):
-        return act(x)
 
 
 def normalize_weight_jit(log_weight_norm, weight):
@@ -111,7 +94,6 @@ class Conv2D(nn.Conv2d):
     def forward(self, x):
         # do data based initialization
         self.weight_normalized = self.normalize_weight()
-        #print(self.weight_normalized.shape)
         bias = self.bias
         return F.conv2d(x, self.weight_normalized, bias, self.stride,
                         self.padding, self.dilation, self.groups)
@@ -134,51 +116,9 @@ class Identity(nn.Module):
         return x
 
 
-class SyncBatchNorm(nn.Module):
-    def __init__(self, *args, **kwargs):
-        super(SyncBatchNorm, self).__init__()
-        self.bn = nn.BatchNorm(*args, **kwargs)
-
-    def forward(self, x):
-        return self.bn(x)
-
-
 # quick switch between multi-gpu, single-gpu batch norm
 def get_batchnorm(*args, **kwargs):
     return nn.BatchNorm2d(*args, **kwargs)
-
-
-class ELUConv(nn.Module):
-    def __init__(self, C_in, C_out, kernel_size, stride=1, padding=0, dilation=1):
-        super(ELUConv, self).__init__()
-        self.upsample = stride == -1
-        stride = abs(stride)
-        self.conv_0 = Conv2D(C_in, C_out, kernel_size, stride=stride, padding=padding, bias=True, dilation=dilation,
-                             data_init=True)
-
-    def forward(self, x):
-        out = F.elu(x)
-        if self.upsample:
-            out = F.interpolate(out, scale_factor=2, mode='nearest')
-        out = self.conv_0(out)
-        return out
-
-
-class BNELUConv(nn.Module):
-    def __init__(self, C_in, C_out, kernel_size, stride=1, padding=0, dilation=1):
-        super(BNELUConv, self).__init__()
-        self.upsample = stride == -1
-        stride = abs(stride)
-        self.bn = get_batchnorm(C_in, eps=BN_EPS, momentum=0.05)
-        self.conv_0 = Conv2D(C_in, C_out, kernel_size, stride=stride, padding=padding, bias=True, dilation=dilation)
-
-    def forward(self, x):
-        x = self.bn(x)
-        out = F.elu(x)
-        if self.upsample:
-            out = F.interpolate(out, scale_factor=2, mode='nearest')
-        out = self.conv_0(out)
-        return out
 
 
 class BNSwishConv(nn.Module):

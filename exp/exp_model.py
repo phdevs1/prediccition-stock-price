@@ -1,23 +1,15 @@
 # -*-Encoding: utf-8 -*-
 from data_load.data_loader import Dataset_Custom
 from model.model import diffusion_generate, denoise_net, pred_net
-from torch.optim.lr_scheduler import OneCycleLR, StepLR
 
 from gluonts.torch.util import copy_parameters
 from utils.tools import EarlyStopping, adjust_learning_rate
-from model.resnet import Res12_Quadratic
-from model.diffusion_process import GaussianDiffusion
 
-from model.encoder import Encoder
-from model.embedding import DataEmbedding
 import numpy as np
-import math
-import collections
 import torch
 import torch.nn as nn
 from torch import optim
 from torch.utils.data import DataLoader
-import torch.nn.functional as F
 
 import os
 import time
@@ -32,11 +24,9 @@ class Exp_Model(object):
         self.args = args
         self.device = self._acquire_device()
 
-        self.gen_net = diffusion_generate(args).to(self.device)
         self.denoise_net = denoise_net(args).to(self.device)
         self.diff_step = args.diff_steps
         self.pred_net = pred_net(args).to(self.device)
-        self.embedding = DataEmbedding(args.input_dim, args.embedding_dimension, args.dropout_rate)
 
     def _acquire_device(self):
         if self.args.use_gpu:
@@ -184,7 +174,6 @@ class Exp_Model(object):
             batch_y = batch_y[...,-self.args.target_dim:].float().to(self.device)
             batch_x_mark = batch_x_mark.float().to(self.device)
             noisy_out, out = self.pred_net(batch_x, batch_x_mark)
-            # print(out.shape, batch_y.shape)
             noisy.append(noisy_out.squeeze(1).detach().cpu().numpy())
             preds.append(out.squeeze(1).detach().cpu().numpy())
             trues.append(batch_y.detach().cpu().numpy())
@@ -193,10 +182,8 @@ class Exp_Model(object):
         trues = np.array(trues)
         noisy = np.array(noisy)
         input = np.array(input)
-        # print('test shape:', preds.shape, trues.shape)
         preds = preds.reshape(-1, preds.shape[-2], preds.shape[-1])
         trues = trues.reshape(-1, trues.shape[-2], trues.shape[-1])
-        # print('test shape:', preds.shape, trues.shape)
         mse = np.mean((preds - trues) ** 2)
         print('mse:{}'.format(mse))
 

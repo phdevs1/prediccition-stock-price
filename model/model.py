@@ -104,36 +104,3 @@ class pred_net(denoise_net):
         out = y - grad_x*1
         return y, out
 
-
-class Discriminator(nn.Module):
-    def __init__(self, neg_slope=0.2, latent_dim=10, hidden_units=1000, out_units=2):
-        super(Discriminator, self).__init__()
-
-        # Activation parameters
-        self.neg_slope = neg_slope
-        self.leaky_relu = nn.LeakyReLU(self.neg_slope, True)
-
-        # Layer parameters
-        self.z_dim = latent_dim
-        self.hidden_units = hidden_units
-        # theoretically 1 with sigmoid but gives bad results => use 2 and softmax
-        out_units = out_units
-
-        # Fully connected layers
-        self.lin1 = nn.Linear(self.z_dim, hidden_units)
-        self.lin2 = nn.Linear(hidden_units, hidden_units)
-        self.lin3 = nn.Linear(hidden_units, hidden_units)
-        self.lin4 = nn.Linear(hidden_units, hidden_units)
-        self.lin5 = nn.Linear(hidden_units, hidden_units)
-        self.lin6 = nn.Linear(hidden_units, out_units)
-        self.softmax = nn.Softmax()
-
-    def forward(self, z):
-        # Fully connected layers with leaky ReLu activations
-        z = self.leaky_relu(self.lin1(z))
-        z = self.leaky_relu(self.lin2(z))
-        z = self.leaky_relu(self.lin3(z))
-        z = self.leaky_relu(self.lin4(z))
-        z = self.leaky_relu(self.lin5(z))
-        z = self.lin6(z)
-        return z
