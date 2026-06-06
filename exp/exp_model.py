@@ -1,8 +1,7 @@
 # -*-Encoding: utf-8 -*-
 from data_load.data_loader import Dataset_Custom
-from model.model import diffusion_generate, denoise_net, pred_net
+from model.model import pred_net
 
-from gluonts.torch.util import copy_parameters
 from utils.tools import EarlyStopping, adjust_learning_rate
 
 import numpy as np
@@ -23,8 +22,6 @@ class Exp_Model(object):
         self.args = args
         self.device = self._acquire_device()
 
-        self.denoise_net = denoise_net(args).to(self.device)
-        self.diff_step = args.diff_steps
         self.pred_net = pred_net(args).to(self.device)
 
     def _acquire_device(self):
@@ -62,42 +59,24 @@ class Exp_Model(object):
         return data_set, data_loader
 
     def _select_optimizer(self):
-        denoise_optim = optim.Adam(
-            self.denoise_net.parameters(), lr=self.args.learning_rate, betas=(0.9, 0.95), weight_decay=self.args.weight_decay
+        optimizer = optim.Adam(
+            self.pred_net.parameters(), lr=self.args.learning_rate, betas=(0.9, 0.95), weight_decay=self.args.weight_decay
         )
-        return denoise_optim
+        return optimizer
 
     def _select_criterion(self):
         criterion =  nn.MSELoss()
         return criterion
 
     def vali(self, vali_data, vali_loader, criterion):
-        # by doing one forward pass with a sample batch on the correct device.
-        try:
-            sample_iter = iter(vali_loader)
-            sample_batch = next(sample_iter)
-            batch_x_s, batch_y_s, batch_x_mark_s, batch_y_mark_s = sample_batch
-            batch_x_s = batch_x_s.float().to(self.device)
-            batch_x_mark_s = batch_x_mark_s.float().to(self.device)
-            with torch.no_grad():
-                # run a forward to lazily initialize modules inside pred_net
-                try:
-                    self.pred_net(batch_x_s, batch_x_mark_s)
-                except Exception:
-                    # If pred_net forward fails for any reason, ignore and proceed to copy;
-                    # copy_parameters may still work if both nets were initialized previously.
-                    pass
-        except Exception:
-            # if sampling fails, proceed; copy_parameters may still work
-            pass
-        copy_parameters(self.denoise_net, self.pred_net)
         total_mse = []
 
         for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(vali_loader):
             batch_x = batch_x.float().to(self.device)
             batch_x_mark = batch_x_mark.float().to(self.device)
             batch_y = batch_y[...,-self.args.target_dim:].float().to(self.device)
-            noisy_out, out = self.pred_net(batch_x, batch_x_mark)
+            output = self.pred_net(batch_x, batch_x_mark)
+            out = output.mu
             mse = criterion(out.squeeze(1), batch_y)
             total_mse.append(mse.item())
 
@@ -112,71 +91,68 @@ class Exp_Model(object):
         if not os.path.exists(path):
             os.makedirs(path)
         early_stopping = EarlyStopping(patience=self.args.patience, verbose=True)
-        denoise_optim = self._select_optimizer()
+        optimizer = self._select_optimizer()
         criterion =  self._select_criterion()
 
         for epoch in range(self.args.train_epochs):
             mse = []
             kl = []
-            dsm = []
             all_loss = []
-            self.denoise_net.train()
+            self.pred_net.train()
             for i, (batch_x, batch_y, x_mark, y_mark) in enumerate(train_loader):
-                t = torch.randint(0, self.diff_step, (self.args.batch_size,)).long().to(self.device)
                 batch_x = batch_x.float().to(self.device)
                 x_mark = x_mark.float().to(self.device)
                 batch_y = batch_y[...,-self.args.target_dim:].float().to(self.device)
-                denoise_optim.zero_grad()
-                output, y_noisy, dsm_loss = self.denoise_net(batch_x, x_mark, batch_y, t)
-                recon = output.log_prob(y_noisy)
-                mse_loss = criterion(output.sample(), y_noisy)
+                optimizer.zero_grad()
+                output = self.pred_net(batch_x, x_mark)
+                y = batch_y.unsqueeze(1)
+                recon = output.log_prob(y)
+                mse_loss = criterion(output.sample(), y)
                 kl_loss = - torch.mean(torch.sum(recon, dim=[1, 2, 3]))
-                loss = mse_loss + self.args.zeta * kl_loss + self.args.eta * dsm_loss
+                loss = mse_loss + self.args.zeta * kl_loss
 
                 mse.append(mse_loss.item())
                 kl.append(kl_loss.item()*self.args.zeta)
-                dsm.append(dsm_loss.item()*self.args.eta)
                 all_loss.append(loss.item())
                 loss.backward()
-                denoise_optim.step()
+                optimizer.step()
                 if i%40==0:
                     print(loss)
             all_loss = np.average(all_loss)
             kl = np.average(kl)
-            dsm = np.average(dsm)
             mse = np.average(mse)
             vali_mse = self.vali(vali_data, vali_loader, criterion)
 
-            print("Epoch: {0}, Steps: {1} | MSE Loss: {2:.7f} KL Loss: {3:.7f} DSM Loss: {4:.7f} Overall Loss:{5:.7f}".format(
-                epoch + 1, train_steps, mse, kl, dsm, all_loss))
-            early_stopping(vali_mse, self.denoise_net, path)
-            # if early_stopping.early_stop:
-            #     print("Early stopping")
-            #     break
-            adjust_learning_rate(denoise_optim, epoch+1, self.args)
+            # print("Epoch: {0}, Steps: {1} | MSE Loss: {2:.7f} KL Loss: {3:.7f} Overall Loss:{4:.7f}".format(
+            #     epoch + 1, train_steps, mse, kl, all_loss))
+            # early_stopping(vali_mse, self.pred_net, path)
+            # adjust_learning_rate(optimizer, epoch+1, self.args)
+
+            print("Epoch: {0}, Steps: {1} | MSE Loss: {2:.7f} KL Loss: {3:.7f} Overall Loss:{4:.7f}".format(
+                epoch + 1, train_steps, mse, kl, all_loss))
+            early_stopping(vali_mse, self.pred_net, path)
+            if early_stopping.early_stop:
+                print("Early stopping")
+                break
+            adjust_learning_rate(optimizer, epoch+1, self.args)
+
         best_model_path = path+'/'+'checkpoint.pth'
-        self.denoise_net.load_state_dict(torch.load(best_model_path))
+        self.pred_net.load_state_dict(torch.load(best_model_path))
 
     def test(self, setting):
-        copy_parameters(self.denoise_net, self.pred_net)
         test_data, test_loader = self._get_data(flag='test')
         preds = []
         trues = []
-        noisy = []
-        input = []
         for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(test_loader):
             batch_x = batch_x.float().to(self.device)
             batch_y = batch_y[...,-self.args.target_dim:].float().to(self.device)
             batch_x_mark = batch_x_mark.float().to(self.device)
-            noisy_out, out = self.pred_net(batch_x, batch_x_mark)
-            noisy.append(noisy_out.squeeze(1).detach().cpu().numpy())
+            output = self.pred_net(batch_x, batch_x_mark)
+            out = output.mu
             preds.append(out.squeeze(1).detach().cpu().numpy())
             trues.append(batch_y.detach().cpu().numpy())
-            input.append(batch_x[...,-1:].detach().cpu().numpy())
         preds = np.array(preds)
         trues = np.array(trues)
-        noisy = np.array(noisy)
-        input = np.array(input)
         preds = preds.reshape(-1, preds.shape[-2], preds.shape[-1])
         trues = trues.reshape(-1, trues.shape[-2], trues.shape[-1])
         mse = np.mean((preds - trues) ** 2)
