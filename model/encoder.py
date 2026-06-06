@@ -9,6 +9,8 @@ from .neural_operations import OPS, EncCombinerCell, DecCombinerCell, Conv2D, ge
 from .utils import get_stride_for_cell_type, get_input_size, groups_per_scale, get_arch_cells
 
 
+# CELDA RESIDUAL (r_enc / r_dec)
+# Implementa las celdas residuales del encoder/decoder tower
 class Cell(nn.Module):
     def __init__(self, Cin, Cout, cell_type, arch, use_se):
         super(Cell, self).__init__()
@@ -36,10 +38,12 @@ class Cell(nn.Module):
         return skip + 0.1 * s
 
 
+
 def soft_clamp5(x: torch.Tensor):
     return x.div(5.).tanh_().mul(5.)
 
 
+# Muestreo con reparameterización: z = mu + sigma * eps
 def sample_normal_jit(mu, sigma):
     eps = mu.mul(0).normal_()
     # print(eps)
@@ -48,6 +52,7 @@ def sample_normal_jit(mu, sigma):
     return z, eps
 
 
+# DISTRIBUCIÓN NORMAL para el muestreo de variables latentes Z
 class Normal:
     def __init__(self, mu, log_sigma, temp=1.):
         self.mu = soft_clamp5(mu)
@@ -56,6 +61,7 @@ class Normal:
         if temp != 1.:
             self.sigma *= temp
 
+    # Reparameterized sampling: z ~ N(mu, sigma)
     def sample(self):
         return sample_normal_jit(self.mu, self.sigma)
 
@@ -101,9 +107,12 @@ def log_density_gaussian(sample, mu, logvar):
     return loss_p_z
 
 
+# ENCODER (NVAE) — Arquitectura completa del modelo generativo
 class Encoder(nn.Module):
     def __init__(self, args):
         super(Encoder, self).__init__()
+        # keep args available to instance methods
+        self.args = args
 
         self.channel_mult = args.channel_mult
         self.mult = args.mult
@@ -111,6 +120,8 @@ class Encoder(nn.Module):
         self.num_preprocess_blocks = args.num_preprocess_blocks
         self.num_preprocess_cells = args.num_preprocess_cells
         self.num_channels_enc = args.num_channels_enc
+
+        # Arquitectura de celdas residuales r_enc y r_dec
         self.arch_instance = get_arch_cells(args.arch_instance)
         self.stem = Conv2D(1, args.num_channels_enc, 3, padding=1, bias=True)
         self.num_latent_per_group = args.num_latent_per_group
@@ -127,19 +138,23 @@ class Encoder(nn.Module):
         c_scaling = self.channel_mult ** (self.num_preprocess_blocks) #4
         spatial_scaling = 2 ** (self.num_preprocess_blocks) #4
 
+        # PRIOR ftr0 (Z_0 prior)
         prior_ftr0_size = (int(c_scaling * self.num_channels_dec), args.prediction_length// spatial_scaling,
                            (args.embedding_dimension + args.hidden_size + 1) // spatial_scaling)
         self.prior_ftr0 = nn.Parameter(torch.rand(size=prior_ftr0_size), requires_grad=True)
         self.z0_size = [self.num_latent_per_group, args.prediction_length // spatial_scaling, (args.embedding_dimension+ args.hidden_size + 1) // spatial_scaling]
 
         self.pre_process = self.init_pre_process(args.mult)
+        # Encoder tower: extrae representaciones para inferir latentes
         self.enc_tower = self.init_encoder_tower(self.mult)
 
         self.enc0 = nn.Sequential(nn.ELU(), Conv2D(self.num_channels_enc * self.mult,
                         self.num_channels_enc * self.mult, kernel_size=1, bias=True), nn.ELU())
 
+        # producen mu y log_sigma para las variables latentes Z 
         self.enc_sampler, self.dec_sampler = self.init_sampler(self.mult)
 
+        # Decoder tower: genera la predicción a partir de los Z
         self.dec_tower = self.init_decoder_tower(self.mult)
 
         self.post_process = self.init_post_process(self.mult)
@@ -153,6 +168,7 @@ class Encoder(nn.Module):
             batch_first=True,
         )
 
+    # Construye los bloques de pre-procesamiento que reducen la resolución espacial y aumentan canales antes del encoder tower.
     def init_pre_process(self, mult):
         pre_process = nn.ModuleList()
         for b in range(self.num_preprocess_blocks):
@@ -189,7 +205,6 @@ class Encoder(nn.Module):
         return enc_tower
 
     def init_decoder_tower(self, mult):
-
         dec_tower = nn.ModuleList()
         for g in range(self.groups_per_scale):
             num_c = int(self.num_channels_dec * mult)
@@ -197,7 +212,6 @@ class Encoder(nn.Module):
                 arch = self.arch_instance['normal_dec']
                 cell = Cell(num_c, num_c, cell_type='normal_dec', arch=arch, use_se=self.use_se)
                 dec_tower.append(cell)
-            #print(num_c)
             cell = DecCombinerCell(num_c, self.num_latent_per_group, num_c, cell_type='combiner_dec')
             dec_tower.append(cell)
         self.mult = mult
@@ -267,13 +281,14 @@ class Encoder(nn.Module):
         for cell in self.dec_tower:
             if cell.cell_type == 'combiner_dec':
                 if idx_dec > 0:
+                    # Fusiona features del encoder con features del decoder
                     ftr = combiner_cells_enc[idx_dec - 1](combiner_cells_s[idx_dec - 1], s)
                     param = self.enc_sampler[idx_dec](ftr)
                     mu_q, log_sig_q = torch.chunk(param, 2, dim=1)
                     dist = Normal(mu_q, log_sig_q)
-                    z, _ = dist.sample()    # z_n
+                    z, _ = dist.sample()
                     all_z.append(z)
-                    #print(z.shape)
+                # Combina Z con features del decoder
                 s = cell(s, z)
                 idx_dec += 1
             else:
@@ -281,7 +296,8 @@ class Encoder(nn.Module):
 
         for cell in self.post_process:
             s = cell(s)
-        # print(s.shape)
+
+        # Capa de salida: genera logits con 2 canales (mu, log_sigma)
         logits = self.image_conditional(s)
         logits = self.projection(logits[...,-(self.input_size + self.hidden_size):])
         return logits
