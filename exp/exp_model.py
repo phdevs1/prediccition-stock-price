@@ -68,7 +68,7 @@ class Exp_Model(object):
         criterion =  nn.MSELoss()
         return criterion
 
-    def vali(self, vali_data, vali_loader, criterion):
+    def vali(self, vali_loader, criterion):
         total_mse = []
 
         for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(vali_loader):
@@ -84,8 +84,8 @@ class Exp_Model(object):
         return total_mse
 
     def train(self, setting):
-        train_data, train_loader = self._get_data(flag = 'train')
-        vali_data, vali_loader = self._get_data(flag = 'val')
+        _, train_loader = self._get_data(flag = 'train')
+        _, vali_loader = self._get_data(flag = 'val')
         train_steps = len(train_loader)
         path = os.path.join(self.args.checkpoints, setting)
         if not os.path.exists(path):
@@ -121,12 +121,7 @@ class Exp_Model(object):
             all_loss = np.average(all_loss)
             kl = np.average(kl)
             mse = np.average(mse)
-            vali_mse = self.vali(vali_data, vali_loader, criterion)
-
-            # print("Epoch: {0}, Steps: {1} | MSE Loss: {2:.7f} KL Loss: {3:.7f} Overall Loss:{4:.7f}".format(
-            #     epoch + 1, train_steps, mse, kl, all_loss))
-            # early_stopping(vali_mse, self.pred_net, path)
-            # adjust_learning_rate(optimizer, epoch+1, self.args)
+            vali_mse = self.vali(vali_loader, criterion)
 
             print("Epoch: {0}, Steps: {1} | MSE Loss: {2:.7f} KL Loss: {3:.7f} Overall Loss:{4:.7f}".format(
                 epoch + 1, train_steps, mse, kl, all_loss))
