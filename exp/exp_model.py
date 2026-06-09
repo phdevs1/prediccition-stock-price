@@ -102,7 +102,7 @@ class Exp_Model(object):
             for i, (batch_x, batch_y, x_mark, y_mark) in enumerate(train_loader):
                 batch_x = batch_x.float().to(self.device)
                 x_mark = x_mark.float().to(self.device)
-                batch_y = batch_y[...,-self.args.target_dim:].float().to(self.device)
+                batch_y = batch_y.float().to(self.device)
                 optimizer.zero_grad()
                 output = self.pred_net(batch_x, x_mark)
                 y = batch_y.unsqueeze(1)
