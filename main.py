@@ -15,7 +15,7 @@ np.random.seed(fix_seed)
 parser = argparse.ArgumentParser(description='generating')
 
 # Load data
-parser.add_argument('--root_path', type=str, default='./data/2016', help='root path of the data files')
+parser.add_argument('--root_path', type=str, default='./data_processed', help='root path of the data files')
 parser.add_argument('--checkpoints', type=str, default='./checkpoints/', help='location of model checkpoints')
 parser.add_argument('--sequence_length', type=int, default=10, help='length of input sequence')
 parser.add_argument('--prediction_length', type=int, default=None, help='prediction sequence length')
@@ -59,17 +59,20 @@ args.use_gpu = True if torch.cuda.is_available() and args.use_gpu else False
 if args.prediction_length is None:
     args.prediction_length = args.sequence_length
 
+model_prefix = 'bi-mamba' if args.use_bimamba else 'dva'
+args.checkpoints = os.path.join('./checkpoints/', model_prefix)
+
 print('Args in experiment:')
 print(args)
 
 Exp = Exp_Model
 results = pd.DataFrame(columns=['Ticker', 'MSE', 'StdDev'])
-train_setting = 'tp{}_sl{}'.format(args.root_path.split(os.sep)[-1], args.sequence_length)
+train_setting = 'tp_sl{}'.format(args.sequence_length)
 
 for idx, file in enumerate(os.listdir(args.root_path)): # Iterate through all tickers
     print('\n\nRunning on file {} ({}/{})...'.format(file, idx+1, len(os.listdir(args.root_path))))
     args.data_path = file
-    ticker = os.path.splitext(file)[0]
+    ticker = os.path.splitext(file)[0].replace('_processed', '')
     all_mse = []
 
     for ii in range(0, args.itr):
@@ -84,8 +87,8 @@ for idx, file in enumerate(os.listdir(args.root_path)): # Iterate through all ti
 
     results = results.append({'Ticker': ticker, 'MSE': np.mean(np.array(all_mse)), 'StdDev': np.std(np.array(all_mse))}, ignore_index=True)
 
-folder_path = './results/'
+folder_path = os.path.join('./results/', model_prefix)
 if not os.path.exists(folder_path):
     os.makedirs(folder_path)
-results.to_csv(folder_path + train_setting + '.csv', index=False)
+results.to_csv(os.path.join(folder_path, train_setting + '.csv'), index=False)
 print(results)

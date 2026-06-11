@@ -69,18 +69,20 @@ class Exp_Model(object):
         return criterion
 
     def vali(self, vali_loader, criterion):
+        self.pred_net.eval()
         total_mse = []
+        with torch.no_grad():
+            for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(vali_loader):
+                batch_x = batch_x.float().to(self.device)
+                batch_x_mark = batch_x_mark.float().to(self.device)
+                batch_y = batch_y[...,-self.args.target_dim:].float().to(self.device)
+                output = self.pred_net(batch_x, batch_x_mark)
+                out = output.mu
+                mse = criterion(out.squeeze(1), batch_y)
+                total_mse.append(mse.item())
 
-        for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(vali_loader):
-            batch_x = batch_x.float().to(self.device)
-            batch_x_mark = batch_x_mark.float().to(self.device)
-            batch_y = batch_y[...,-self.args.target_dim:].float().to(self.device)
-            output = self.pred_net(batch_x, batch_x_mark)
-            out = output.mu
-            mse = criterion(out.squeeze(1), batch_y)
-            total_mse.append(mse.item())
-
-        total_mse = np.average(total_mse)
+            total_mse = np.average(total_mse)
+        self.pred_net.train()
         return total_mse
 
     def train(self, setting):

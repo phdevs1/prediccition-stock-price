@@ -7,8 +7,8 @@ Quick environment
 
 Main entrypoints
 - Run full experiment sweep (iterates every CSV in a directory):
-  python main.py --root_path data/2016 --sequence_length 10
-  run.sh contains examples that run the script for different years/sequence lengths.
+  python main.py --root_path data_processed --sequence_length 10
+  run.sh contains examples that run the script for different sequence lengths.
 - main.py will loop over every file in --root_path and treat each CSV as a ticker.
 
 Data format and loader behaviour (must-not-miss)
@@ -21,7 +21,7 @@ Important arguments and defaults
 - --input_dim default 6; ensure CSV has matching number of feature columns used by the model.
 - --batch_size default 16; DataLoader uses drop_last=True so batches will always be full size.
 - --checkpoints default ./checkpoints/; checkpoints are saved to ./checkpoints/{setting}/checkpoint.pth by EarlyStopping.
-- Results: after a full run main.py writes ./results/tp<root_dir_name>_sl<sequence_length>.csv containing per-ticker MSE and StdDev.
+- Results: after a full run main.py writes ./results/tp_sl<sequence_length>.csv containing per-ticker MSE and StdDev.
 
 GPU / CUDA notes (common source of confusion)
 - The code sets args.use_gpu = True if torch.cuda.is_available() and args.use_gpu else False. It also sets CUDA_VISIBLE_DEVICES=os.environ inside Exp_Model when use_gpu is True.
