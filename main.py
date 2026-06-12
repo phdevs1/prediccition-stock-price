@@ -20,7 +20,7 @@ parser.add_argument('--checkpoints', type=str, default='./checkpoints/', help='l
 parser.add_argument('--sequence_length', type=int, default=10, help='length of input sequence')
 parser.add_argument('--prediction_length', type=int, default=None, help='prediction sequence length')
 parser.add_argument('--target_dim', type=int, default=1, help='dimension of target')
-parser.add_argument('--input_dim', type=int, default=6, help='dimension of input')
+parser.add_argument('--input_dim', type=int, default=5, help='dimension of input')
 parser.add_argument('--hidden_size', type=int, default=128, help='encoder dimension')
 parser.add_argument('--embedding_dimension', type=int, default=64, help='feature embedding dimension')
 parser.add_argument('--dropout_rate', type=float, default=0.1, help='dropout')

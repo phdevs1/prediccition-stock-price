@@ -1,5 +1,6 @@
 # -*-Encoding: utf-8 -*-
 import os
+import numpy as np
 import pandas as pd
 
 import torch
@@ -40,7 +41,6 @@ class Dataset_Custom(Dataset):
         self.__read_data__()
 
     def __read_data__(self):
-        self.scaler = StandardScaler()
         df_raw = pd.read_csv(os.path.join(self.root_path, self.data_path))
         length = len( df_raw)
         num_train = int(length*0.7)
@@ -52,19 +52,33 @@ class Dataset_Custom(Dataset):
         border1 = border1s[self.set_type]
         border2 = border2s[self.set_type]
 
-        cols_data = df_raw.columns[1:]
-        df_data = df_raw[cols_data]
+        feature_cols = [
+            "open_ret",
+            "high_ret",
+            "low_ret",
+            "close_ret",
+            "log_volume"
+        ]
+        target_col = ["target_return"]
 
-        train_data = df_data[border1s[0]:border2s[0]]
-        # data normalization
-        self.scaler.fit(train_data.values)
-        data = self.scaler.transform(df_data.values)
+        df_x = df_raw[feature_cols]
+        df_y = df_raw[target_col]
+
+        # scaler features
+        self.scaler = StandardScaler()
+        self.scaler.fit(df_x.iloc[:num_train].values)
+        data_x = self.scaler.transform(df_x.values)
+
+        # scaler target
+        self.target_scaler = StandardScaler()
+        self.target_scaler.fit(df_y.iloc[:num_train].values)
+        data_y = self.target_scaler.transform(df_y.values)
 
         df_stamp = pd.DatetimeIndex(df_raw[border1:border2]['date'])
         data_stamp = time_features(df_stamp)
 
-        self.data_x = data[border1:border2]
-        self.data_y = data[border1:border2]
+        self.data_x = data_x[border1:border2]
+        self.data_y = data_y[border1:border2]
         self.data_stamp = data_stamp
 
     def __getitem__(self, index):
