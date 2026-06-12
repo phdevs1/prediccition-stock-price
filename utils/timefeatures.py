@@ -1,4 +1,3 @@
-# -*-Encoding: utf-8 -*-
 import numpy as np
 import pandas as pd
 
@@ -14,37 +13,31 @@ class TimeFeature:
         return self.__class__.__name__ + "()"
 
 
-class MinuteOfHour(TimeFeature):
-    """Minute of hour encoded as value between [-0.5, 0.5]"""
+class MonthOfYear(TimeFeature):
+    """Mes del año, codificado como entero 0-11 (compatible con month_embed,
+    nn.Embedding(13, d_model))."""
     def __call__(self, index: pd.DatetimeIndex) -> np.ndarray:
-        return index.minute / 59.0 - 0.5
-
-
-class HourOfDay(TimeFeature):
-    """Hour of day encoded as value between [-0.5, 0.5]"""
-    def __call__(self, index: pd.DatetimeIndex) -> np.ndarray:
-        return index.hour / 23.0 - 0.5
-
-
-class DayOfWeek(TimeFeature):
-    """Hour of day encoded as value between [-0.5, 0.5]"""
-    def __call__(self, index: pd.DatetimeIndex) -> np.ndarray:
-        return index.dayofweek / 6.0 - 0.5
-
-
+        return (index.month - 1).to_numpy()
+ 
+ 
 class DayOfMonth(TimeFeature):
-    """Day of month encoded as value between [-0.5, 0.5]"""
+    """Día del mes, codificado como entero 0-30 (compatible con day_embed,
+    nn.Embedding(32, d_model))."""
     def __call__(self, index: pd.DatetimeIndex) -> np.ndarray:
-        return (index.day - 1) / 30.0 - 0.5
-
-
-class DayOfYear(TimeFeature):
-    """Day of year encoded as value between [-0.5, 0.5]"""
+        return (index.day - 1).to_numpy()
+ 
+ 
+class DayOfWeek(TimeFeature):
+    """Día de la semana, codificado como entero 0-6, Lunes=0 (compatible con
+    weekday_embed, nn.Embedding(7, d_model)). En datos de mercado solo
+    tomara valores 0-4 (Lunes-Viernes), lo cual es valido."""
     def __call__(self, index: pd.DatetimeIndex) -> np.ndarray:
-        return (index.dayofyear - 1) / 365.0 - 0.5
+        return index.dayofweek.to_numpy()
 
 
 def time_features(dates, freq='t'):
-    dates = pd.to_datetime(dates.values)
-    features = [MinuteOfHour(), HourOfDay(), DayOfWeek(), DayOfMonth(), DayOfYear()]
-    return np.vstack([feat(dates) for feat in features]).transpose(1, 0)
+    
+    dates = pd.DatetimeIndex(pd.to_datetime(dates.values))
+ 
+    features = [MonthOfYear(), DayOfMonth(), DayOfWeek()]
+    return np.vstack([feat(dates) for feat in features]).transpose(1, 0).astype(np.int64)

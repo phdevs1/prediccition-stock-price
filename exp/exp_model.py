@@ -76,7 +76,7 @@ class Exp_Model(object):
                 batch_x = batch_x.float().to(self.device)
                 batch_x_mark = batch_x_mark.float().to(self.device)
                 batch_y = batch_y[...,-self.args.target_dim:].float().to(self.device)
-                output = self.pred_net(batch_x, batch_x_mark)
+                output, _ = self.pred_net(batch_x, batch_x_mark)
                 out = output.mu
                 mse = criterion(out.squeeze(1), batch_y)
                 total_mse.append(mse.item())
@@ -106,15 +106,13 @@ class Exp_Model(object):
                 x_mark = x_mark.float().to(self.device)
                 batch_y = batch_y.float().to(self.device)
                 optimizer.zero_grad()
-                output = self.pred_net(batch_x, x_mark)
+                output, kl_loss = self.pred_net(batch_x, x_mark)
                 y = batch_y.unsqueeze(1)
-                recon = output.log_prob(y)
                 mse_loss = criterion(output.sample(), y)
-                kl_loss = - torch.mean(torch.sum(recon, dim=[1, 2, 3]))
                 loss = mse_loss + self.args.zeta * kl_loss
 
                 mse.append(mse_loss.item())
-                kl.append(kl_loss.item()*self.args.zeta)
+                kl.append(kl_loss.item() * self.args.zeta)
                 all_loss.append(loss.item())
                 loss.backward()
                 optimizer.step()
@@ -144,7 +142,7 @@ class Exp_Model(object):
             batch_x = batch_x.float().to(self.device)
             batch_y = batch_y[...,-self.args.target_dim:].float().to(self.device)
             batch_x_mark = batch_x_mark.float().to(self.device)
-            output = self.pred_net(batch_x, batch_x_mark)
+            output, _ = self.pred_net(batch_x, batch_x_mark)
             out = output.mu
             preds.append(out.squeeze(1).detach().cpu().numpy())
             trues.append(batch_y.detach().cpu().numpy())

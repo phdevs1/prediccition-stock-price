@@ -22,6 +22,9 @@ Important arguments and defaults
 - --batch_size default 16; DataLoader uses drop_last=True so batches will always be full size.
 - --checkpoints default ./checkpoints/; checkpoints are saved to ./checkpoints/{setting}/checkpoint.pth by EarlyStopping.
 - Results: after a full run main.py writes ./results/tp_sl<sequence_length>.csv containing per-ticker MSE and StdDev.
+- Default zeta changed to 0.1 (was 0.5) to reduce KL regularisation dominance.
+- Default patience changed to 7 (was 3) and train_epochs to 100 (was 20) to allow longer training.
+- LR decay changed from every 1 epoch to every 3 epochs (utils/tools.py) to avoid premature LR collapse.
 
 GPU / CUDA notes (common source of confusion)
 - The code sets args.use_gpu = True if torch.cuda.is_available() and args.use_gpu else False. It also sets CUDA_VISIBLE_DEVICES=os.environ inside Exp_Model when use_gpu is True.

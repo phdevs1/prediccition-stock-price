@@ -28,7 +28,7 @@ class PositionalEmbedding(nn.Module):
 class TokenEmbedding(nn.Module):
     def __init__(self, c_in, d_model):
         super(TokenEmbedding, self).__init__()
-        padding = 1 if torch.__version__ >= '1.5.0' else 2
+        padding = 1
         self.tokenConv = nn.Conv1d(in_channels=c_in, out_channels=d_model,
                                    kernel_size=3, padding=padding, padding_mode='circular', bias=False)
         for m in self.modules():
@@ -41,31 +41,29 @@ class TokenEmbedding(nn.Module):
 
 
 class TemporalEmbedding(nn.Module):
+    """
+    Version reducida para datos DIARIOS: solo (month, day, weekday).
+    Coincide con utils/timefeatures.py -> time_features(), que devuelve
+    shape (N, 3) en ese mismo orden.
+    """
     def __init__(self, d_model):
         super(TemporalEmbedding, self).__init__()
 
-        minute_size = 4; hour_size = 24
         weekday_size = 7; day_size = 32; month_size = 13
 
         Embed = nn.Embedding
-        self.fc = nn.Linear(5*d_model, d_model)
-        self.minute_embed = Embed(minute_size, d_model)
-        self.hour_embed = Embed(hour_size, d_model)
+        self.fc = nn.Linear(3 * d_model, d_model)
         self.weekday_embed = Embed(weekday_size, d_model)
         self.day_embed = Embed(day_size, d_model)
         self.month_embed = Embed(month_size, d_model)
 
     def forward(self, x):
         x = x.long()
-        minute_x = self.minute_embed(x[:,:,4])
-        hour_x = self.hour_embed(x[:,:,3])
-        weekday_x = self.weekday_embed(x[:,:,2])
-        day_x = self.day_embed(x[:,:,1])
-        month_x = self.month_embed(x[:,:,0])
-        out = torch.cat((minute_x, hour_x, weekday_x, day_x, month_x), dim=2)
-        # print(out.shape)
+        weekday_x = self.weekday_embed(x[:, :, 2])
+        day_x = self.day_embed(x[:, :, 1])
+        month_x = self.month_embed(x[:, :, 0])
+        out = torch.cat((weekday_x, day_x, month_x), dim=2)
         out = self.fc(out)
-        # print(out.shape)
         return out
 
 

@@ -23,6 +23,7 @@ class pred_net(nn.Module):
         x_t, _ = self.rnn(input)
         input = torch.cat([x_t, input], dim=-1)
         input = input.unsqueeze(1)
-        logits = self.generative(input)
+        logits, kl_loss = self.generative(input)
+        self.kl_loss = kl_loss
         output = self.generative.decoder_output(logits)
-        return output
+        return output, kl_loss

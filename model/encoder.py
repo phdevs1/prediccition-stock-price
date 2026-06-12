@@ -216,12 +216,19 @@ class Encoder(nn.Module):
         combiner_cells_enc.reverse()
         combiner_cells_s.reverse()
         idx_dec = 0
-        ftr = self.enc0(s)   #conv
-        param0 = self.enc_sampler[idx_dec](ftr) # another conv2d
+        ftr = self.enc0(s)
+        param0 = self.enc_sampler[idx_dec](ftr)
         mu_q, log_sig_q = torch.chunk(param0, 2, dim=1)
         dist = Normal(mu_q, log_sig_q)
-        z, _ = dist.sample()   #z_0
-        s = self.prior_ftr0.unsqueeze(0) # random value
+        z, _ = dist.sample()
+
+        mu_q_c = soft_clamp5(mu_q)
+        log_sig_q_c = soft_clamp5(log_sig_q)
+        sigma_q = torch.exp(log_sig_q_c)
+        kl_total = 0.5 * (mu_q_c**2 + sigma_q**2 - 2 * log_sig_q_c - 1)
+        kl_total = kl_total.sum(dim=[1, 2, 3]).mean()
+
+        s = self.prior_ftr0.unsqueeze(0)
         batch_size = z.size(0)
         s = s.expand(batch_size, -1, -1, -1)
         idx_dec = 0
@@ -231,8 +238,15 @@ class Encoder(nn.Module):
                     ftr = combiner_cells_enc[idx_dec - 1](combiner_cells_s[idx_dec - 1], s)
                     param = self.enc_sampler[idx_dec](ftr)
                     mu_q, log_sig_q = torch.chunk(param, 2, dim=1)
+
+                    mu_q_c = soft_clamp5(mu_q)
+                    log_sig_q_c = soft_clamp5(log_sig_q)
+                    sigma_q = torch.exp(log_sig_q_c)
+                    kl = 0.5 * (mu_q_c**2 + sigma_q**2 - 2 * log_sig_q_c - 1)
+                    kl_total = kl_total + kl.sum(dim=[1, 2, 3]).mean()
+
                     dist = Normal(mu_q, log_sig_q)
-                    z, _ = dist.sample()    # z_n
+                    z, _ = dist.sample()
                 s = cell(s, z)
                 idx_dec += 1
             else:
@@ -240,10 +254,9 @@ class Encoder(nn.Module):
 
         for cell in self.post_process:
             s = cell(s)
-        # print(s.shape)
         logits = self.image_conditional(s)
         logits = self.projection(logits[...,-(self.input_size + self.hidden_size):])
-        return logits
+        return logits, kl_total
 
     def decoder_output(self, logits):
         return NormalDecoder(logits)

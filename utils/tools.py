@@ -4,7 +4,7 @@ import torch
 
 
 def adjust_learning_rate(optimizer, epoch, args):
-    lr_adjust = {epoch: args.learning_rate * (0.5 ** ((epoch-1) // 1))}
+    lr_adjust = {epoch: args.learning_rate * (0.5 ** ((epoch-1) // 3))}
     if epoch in lr_adjust.keys():
         lr = lr_adjust[epoch]
         for param_group in optimizer.param_groups:
