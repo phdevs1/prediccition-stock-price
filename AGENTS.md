@@ -12,15 +12,18 @@ Main entrypoints
 - main.py will loop over every file in --root_path and treat each CSV as a ticker.
 
 Data format and loader behaviour (must-not-miss)
-- CSVs must have a date column as the first column and numeric feature columns afterwards.
-- Dataset picks columns df_raw.columns[1:] (it ignores the first column) and uses the last feature column as the target (data[..., -1]).
+- CSVs must have a date column as the first column and the following numeric columns:
+  feature columns: columns 1 to N-1 (all between date and target)
+  target column:   last column
+- The loader selects features dynamically: df_raw.columns[1:-1] and target as df_raw.columns[-1:].
 - Train/val/test split is deterministic inside Dataset_Custom: 70% train, 10% val, 20% test (computed from file length). The dataset uses sliding windows; __len__ returns len(data_x) - seq_len - pred_len + 1.
 
 Important arguments and defaults
 - --sequence_length (default 10) and --prediction_length (default None -> equals sequence_length).
-- --input_dim default 6; ensure CSV has matching number of feature columns used by the model.
+- --input_dim default 5 (must match the number of feature columns in the CSV).
 - --batch_size default 16; DataLoader uses drop_last=True so batches will always be full size.
-- --checkpoints default ./checkpoints/; checkpoints are saved to ./checkpoints/{setting}/checkpoint.pth by EarlyStopping.
+- --checkpoints default ./checkpoints/; checkpoints are saved to ./checkpoints/{setting}/checkpoint.pth by EarlyStopping. Since each iteration uses a unique setting (e.g. AMZN_processed.csv_tp_sl10_itr0), checkpoints from different runs no longer overwrite each other.
+- --kl_anneal_epochs default 5; KL weight linearly increases from 0 to zeta over this many epochs to mitigate posterior collapse.
 - Results: after a full run main.py writes ./results/tp_sl<sequence_length>.csv containing per-ticker MSE and StdDev.
 - Default zeta changed to 0.1 (was 0.5) to reduce KL regularisation dominance.
 - Default patience changed to 7 (was 3) and train_epochs to 100 (was 20) to allow longer training.

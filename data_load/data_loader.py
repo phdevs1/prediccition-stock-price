@@ -52,14 +52,8 @@ class Dataset_Custom(Dataset):
         border1 = border1s[self.set_type]
         border2 = border2s[self.set_type]
 
-        feature_cols = [
-            "open_ret",
-            "high_ret",
-            "low_ret",
-            "close_ret",
-            "log_volume"
-        ]
-        target_col = ["target_return"]
+        feature_cols = df_raw.columns[1:-1].tolist()
+        target_col = df_raw.columns[-1:].tolist()
 
         df_x = df_raw[feature_cols]
         df_y = df_raw[target_col]
