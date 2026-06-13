@@ -150,14 +150,27 @@ class Exp_Model(object):
         trues = np.array(trues)
         preds = preds.reshape(-1, preds.shape[-2], preds.shape[-1])
         trues = trues.reshape(-1, trues.shape[-2], trues.shape[-1])
-        mse = np.mean((preds - trues) ** 2)
-        print('mse:{}'.format(mse))
 
-        # folder_path = './results/' + setting +'/'
-        # if not os.path.exists(folder_path):
-        #     os.makedirs(folder_path)
-        # np.save(folder_path + 'pred.npy', preds)
+        orig_shape = preds.shape
+        preds_denorm = test_data.target_scaler.inverse_transform(
+            preds.reshape(-1, 1)
+        ).reshape(orig_shape)
+        trues_denorm = test_data.target_scaler.inverse_transform(
+            trues.reshape(-1, 1)
+        ).reshape(orig_shape)
+
+        mse = np.mean((preds_denorm - trues_denorm) ** 2)
+        rmse = np.sqrt(mse)
+        print('------------------------1---------------------')
+        print(preds_denorm.shape)
+        print('------------------------1---------------------')
+        print('mse:{:.10f} rmse:{:.10f}'.format(mse, rmse))
+
+        folder_path = './results/' + setting +'/'
+        if not os.path.exists(folder_path):
+            os.makedirs(folder_path)
+        np.save(folder_path + 'pred.npy', preds_denorm)
         # np.save(folder_path + 'noisy.npy', noisy)
-        # np.save(folder_path + 'true.npy', trues)
-        # np.save(folder_path + 'input.npy', input)
-        return mse
+        np.save(folder_path + 'true.npy', trues_denorm)
+        np.save(folder_path + 'input.npy', input)
+        return rmse

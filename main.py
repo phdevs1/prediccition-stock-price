@@ -66,14 +66,15 @@ print('Args in experiment:')
 print(args)
 
 Exp = Exp_Model
-results = pd.DataFrame(columns=['Ticker', 'MSE', 'StdDev'])
+results = pd.DataFrame(columns=['Ticker', 'RMSE', 'StdDev'])
 train_setting = 'tp_sl{}'.format(args.sequence_length)
 
-for idx, file in enumerate(os.listdir(args.root_path)): # Iterate through all tickers
-    print('\n\nRunning on file {} ({}/{})...'.format(file, idx+1, len(os.listdir(args.root_path))))
+files = sorted(os.listdir(args.root_path))
+for idx, file in enumerate(files): # Iterate through all tickers
+    print('\n\nRunning on file {} ({}/{})...'.format(file, idx+1, len(files)))
     args.data_path = file
     ticker = os.path.splitext(file)[0].replace('_processed', '')
-    all_mse = []
+    all_rmse = []
 
     for ii in range(0, args.itr):
         setting = args.data_path + '_' + train_setting
@@ -81,11 +82,11 @@ for idx, file in enumerate(os.listdir(args.root_path)): # Iterate through all ti
         print('>>>>>>>start training : {}>>>>>>>>>>>>>>>>>>>>>>>>>>'.format(setting))
         exp.train(setting)
         print('>>>>>>>start testing : {}>>>>>>>>>>>>>>>>>>>>>>>>>>'.format(setting))
-        mse = exp.test(setting)
-        all_mse.append(mse)
+        rmse = exp.test(setting)
+        all_rmse.append(rmse)
         torch.cuda.empty_cache()
 
-    results = results.append({'Ticker': ticker, 'MSE': np.mean(np.array(all_mse)), 'StdDev': np.std(np.array(all_mse))}, ignore_index=True)
+    results = results.append({'Ticker': ticker, 'RMSE': np.mean(np.array(all_rmse)), 'StdDev': np.std(np.array(all_rmse))}, ignore_index=True)
 
 folder_path = os.path.join('./results/', model_prefix)
 if not os.path.exists(folder_path):
