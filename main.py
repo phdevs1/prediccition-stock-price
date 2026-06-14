@@ -77,7 +77,7 @@ for idx, file in enumerate(files): # Iterate through all tickers
     all_rmse = []
 
     for ii in range(0, args.itr):
-        setting = args.data_path + '_' + train_setting
+        setting = args.data_path + '_' + train_setting + '_itr{}'.format(ii)
         exp = Exp(args)  # single experiment
         print('>>>>>>>start training : {}>>>>>>>>>>>>>>>>>>>>>>>>>>'.format(setting))
         exp.train(setting)

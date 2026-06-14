@@ -136,6 +136,7 @@ class Exp_Model(object):
 
     def test(self, setting):
         test_data, test_loader = self._get_data(flag='test')
+        self.pred_net.eval()
         preds = []
         trues = []
         for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(test_loader):
@@ -161,16 +162,11 @@ class Exp_Model(object):
 
         mse = np.mean((preds_denorm - trues_denorm) ** 2)
         rmse = np.sqrt(mse)
-        print('------------------------1---------------------')
-        print(preds_denorm.shape)
-        print('------------------------1---------------------')
         print('mse:{:.10f} rmse:{:.10f}'.format(mse, rmse))
 
         folder_path = './results/' + setting +'/'
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
         np.save(folder_path + 'pred.npy', preds_denorm)
-        # np.save(folder_path + 'noisy.npy', noisy)
         np.save(folder_path + 'true.npy', trues_denorm)
-        np.save(folder_path + 'input.npy', input)
         return rmse
