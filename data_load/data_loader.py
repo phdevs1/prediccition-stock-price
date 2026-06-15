@@ -7,38 +7,55 @@ import torch
 from torch.utils.data import Dataset
 from utils.timefeatures import time_features
 import warnings
-warnings.filterwarnings('ignore')
+
+warnings.filterwarnings("ignore")
 
 
 class StandardScaler(object):
     def __init__(self):
-        self.mean = 0.
-        self.std = 1.
+        self.mean = 0.0
+        self.std = 1.0
 
     def fit(self, data):
         self.mean = data.mean(0)
         self.std = data.std(0)
 
     def transform(self, data):
-        mean = torch.from_numpy(self.mean).type_as(data).to(data.device) if torch.is_tensor(data) else self.mean
-        std = torch.from_numpy(self.std).type_as(data).to(data.device) if torch.is_tensor(data) else self.std
+        mean = (
+            torch.from_numpy(self.mean).type_as(data).to(data.device)
+            if torch.is_tensor(data)
+            else self.mean
+        )
+        std = (
+            torch.from_numpy(self.std).type_as(data).to(data.device)
+            if torch.is_tensor(data)
+            else self.std
+        )
         return (data - mean) / std
 
     def inverse_transform(self, data):
-        mean = torch.from_numpy(self.mean).type_as(data).to(data.device) if torch.is_tensor(data) else self.mean
-        std = torch.from_numpy(self.std).type_as(data).to(data.device) if torch.is_tensor(data) else self.std
+        mean = (
+            torch.from_numpy(self.mean).type_as(data).to(data.device)
+            if torch.is_tensor(data)
+            else self.mean
+        )
+        std = (
+            torch.from_numpy(self.std).type_as(data).to(data.device)
+            if torch.is_tensor(data)
+            else self.std
+        )
         return data * std + mean
 
 
 class Dataset_Custom(Dataset):
-    def __init__(self, root_path, flag='train', size=None, data_path='AAPL.csv'):
+    def __init__(self, root_path, flag="train", size=None, data_path="AAPL.csv"):
         # size [seq_len, label_len, pred_len]
         # info
         self.seq_len = size[0]
         self.pred_len = size[1]
         # init
-        assert flag in ['train', 'test', 'val']
-        type_map = {'train':0, 'val':1, 'test':2}
+        assert flag in ["train", "test", "val"]
+        type_map = {"train": 0, "val": 1, "test": 2}
         self.set_type = type_map[flag]
 
         self.root_path = root_path
@@ -47,13 +64,13 @@ class Dataset_Custom(Dataset):
 
     def __read_data__(self):
         df_raw = pd.read_csv(os.path.join(self.root_path, self.data_path))
-        length = len( df_raw)
-        num_train = int(length*0.7)
-        num_test = int(length*0.2)
-        num_vali = int(length*0.1)
+        length = len(df_raw)
+        num_train = int(length * 0.7)
+        num_test = int(length * 0.2)
+        num_vali = int(length * 0.1)
 
-        border1s = [0, num_train-self.seq_len, num_train+num_vali-self.seq_len]
-        border2s = [num_train, num_train+num_vali, num_train+num_vali+num_test]
+        border1s = [0, num_train - self.seq_len, num_train + num_vali - self.seq_len]
+        border2s = [num_train, num_train + num_vali, num_train + num_vali + num_test]
         border1 = border1s[self.set_type]
         border2 = border2s[self.set_type]
 
@@ -73,7 +90,7 @@ class Dataset_Custom(Dataset):
         self.target_scaler.fit(df_y.iloc[:num_train].values)
         data_y = self.target_scaler.transform(df_y.values)
 
-        df_stamp = pd.DatetimeIndex(df_raw[border1:border2]['date'])
+        df_stamp = pd.DatetimeIndex(df_raw[border1:border2]["date"])
         data_stamp = time_features(df_stamp)
 
         self.data_x = data_x[border1:border2]

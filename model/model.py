@@ -16,7 +16,9 @@ class pred_net(nn.Module):
             batch_first=True,
         )
         self.generative = Encoder(args)
-        self.embedding = DataEmbedding(args.input_dim, args.embedding_dimension, args.dropout_rate)
+        self.embedding = DataEmbedding(
+            args.input_dim, args.embedding_dimension, args.dropout_rate
+        )
 
     def forward(self, x, mark):
         input = self.embedding(x, mark)

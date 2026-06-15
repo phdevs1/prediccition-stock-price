@@ -10,6 +10,7 @@ from typing import Union, List, Dict, Any
 @dataclass
 class ModelArgs:
     """Configuration for SAMBA model architecture"""
+
     d_model: int
     n_layer: int
     vocab_size: int
@@ -17,7 +18,7 @@ class ModelArgs:
     seq_out: int
     d_state: int = 128
     expand: int = 2
-    dt_rank: Union[int, str] = 'auto'
+    dt_rank: Union[int, str] = "auto"
     d_conv: int = 3
     pad_vocab_size_multiple: int = 8
     conv_bias: bool = True
@@ -26,11 +27,12 @@ class ModelArgs:
     def __post_init__(self):
         self.d_inner = int(self.expand * self.d_model)
 
-        if self.dt_rank == 'auto':
+        if self.dt_rank == "auto":
             self.dt_rank = math.ceil(self.d_model / 16)
 
 
 @dataclass
 class TrainingConfig:
     """Configuration for training parameters (not used here)"""
-    dataset: str = 'STOCK_DATA'
+
+    dataset: str = "STOCK_DATA"

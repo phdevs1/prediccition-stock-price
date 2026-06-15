@@ -8,28 +8,55 @@ from collections import OrderedDict
 
 BN_EPS = 1e-5
 
-OPS = OrderedDict([
-    ('res_bnswish', lambda Cin, Cout, stride: BNSwishConv(Cin, Cout, 3, stride, 1)),
-    ('mconv_e6k5g0', lambda Cin, Cout, stride: InvertedResidual(Cin, Cout, stride, ex=6, dil=1, k=5, g=0)),
-    ('mconv_e3k5g0', lambda Cin, Cout, stride: InvertedResidual(Cin, Cout, stride, ex=3, dil=1, k=5, g=1)),
-    # BI-Mamba drop-in: reemplaza cada op conv individual dentro de Cell
-    ('mamba_op', lambda Cin, Cout, stride: MambaOp(Cin, Cout)),
-])
+OPS = OrderedDict(
+    [
+        ("res_bnswish", lambda Cin, Cout, stride: BNSwishConv(Cin, Cout, 3, stride, 1)),
+        (
+            "mconv_e6k5g0",
+            lambda Cin, Cout, stride: InvertedResidual(
+                Cin, Cout, stride, ex=6, dil=1, k=5, g=0
+            ),
+        ),
+        (
+            "mconv_e3k5g0",
+            lambda Cin, Cout, stride: InvertedResidual(
+                Cin, Cout, stride, ex=3, dil=1, k=5, g=1
+            ),
+        ),
+        # BI-Mamba drop-in: reemplaza cada op conv individual dentro de Cell
+        ("mamba_op", lambda Cin, Cout, stride: MambaOp(Cin, Cout)),
+    ]
+)
 
 
 class SyncBatchNormSwish(_BatchNorm):
-    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True,
-                 track_running_stats=True, process_group=None):
-        super(SyncBatchNormSwish, self).__init__(num_features, eps, momentum, affine, track_running_stats)
+    def __init__(
+        self,
+        num_features,
+        eps=1e-5,
+        momentum=0.1,
+        affine=True,
+        track_running_stats=True,
+        process_group=None,
+    ):
+        super(SyncBatchNormSwish, self).__init__(
+            num_features, eps, momentum, affine, track_running_stats
+        )
         self.process_group = process_group
         self.ddp_gpu_size = None
 
     def forward(self, input):
         exponential_average_factor = self.momentum
         out = F.batch_norm(
-            input, self.running_mean, self.running_var, self.weight, self.bias,
+            input,
+            self.running_mean,
+            self.running_var,
+            self.weight,
+            self.bias,
             self.training or not self.track_running_stats,
-            exponential_average_factor, self.eps)
+            exponential_average_factor,
+            self.eps,
+        )
         return out
 
 
@@ -39,7 +66,9 @@ def get_skip_connection(C, stride, channel_mult):
     elif stride == 2:
         return FactorizedReduce(C, int(channel_mult * C))
     elif stride == -1:
-        return nn.Sequential(UpSample(), Conv2D(C, int(C / channel_mult), kernel_size=1))
+        return nn.Sequential(
+            UpSample(), Conv2D(C, int(C / channel_mult), kernel_size=1)
+        )
 
 
 def norm(t, dim):
@@ -65,7 +94,7 @@ class SwishFN(torch.autograd.Function):
 
 def normalize_weight_jit(log_weight_norm, weight):
     n = torch.exp(log_weight_norm)
-    wn = torch.sqrt(torch.sum(weight * weight, dim=[1, 2, 3]))   # norm(w)
+    wn = torch.sqrt(torch.sum(weight * weight, dim=[1, 2, 3]))  # norm(w)
     weight = n * weight / (wn.view(-1, 1, 1, 1) + 1e-5)
     return weight
 
@@ -73,18 +102,32 @@ def normalize_weight_jit(log_weight_norm, weight):
 class Conv2D(nn.Conv2d):
     """Allows for weights as input."""
 
-    def __init__(self, C_in, C_out, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=False,
-                 weight_norm=True):
+    def __init__(
+        self,
+        C_in,
+        C_out,
+        kernel_size,
+        stride=1,
+        padding=0,
+        dilation=1,
+        groups=1,
+        bias=False,
+        weight_norm=True,
+    ):
         """
         Args:
             use_shared (bool): Use weights for this layer or not?
         """
-        super(Conv2D, self).__init__(C_in, C_out, kernel_size, stride, padding, dilation, groups, bias)
+        super(Conv2D, self).__init__(
+            C_in, C_out, kernel_size, stride, padding, dilation, groups, bias
+        )
 
         self.log_weight_norm = None
         if weight_norm:
             init = norm(self.weight, dim=[1, 2, 3]).view(-1, 1, 1, 1)
-            self.log_weight_norm = nn.Parameter(torch.log(init + 1e-2), requires_grad=True)
+            self.log_weight_norm = nn.Parameter(
+                torch.log(init + 1e-2), requires_grad=True
+            )
 
         self.weight_normalized = self.normalize_weight()
 
@@ -92,11 +135,18 @@ class Conv2D(nn.Conv2d):
         # do data based initialization
         self.weight_normalized = self.normalize_weight()
         bias = self.bias
-        return F.conv2d(x, self.weight_normalized, bias, self.stride,
-                        self.padding, self.dilation, self.groups)
+        return F.conv2d(
+            x,
+            self.weight_normalized,
+            bias,
+            self.stride,
+            self.padding,
+            self.dilation,
+            self.groups,
+        )
 
     def normalize_weight(self):
-        """ applies weight normalization """
+        """applies weight normalization"""
         if self.log_weight_norm is not None:
             weight = normalize_weight_jit(self.log_weight_norm, self.weight)
         else:
@@ -126,7 +176,15 @@ class BNSwishConv(nn.Module):
         self.upsample = stride == -1
         stride = abs(stride)
         self.bn_act = SyncBatchNormSwish(C_in, eps=BN_EPS, momentum=0.05)
-        self.conv_0 = Conv2D(C_in, C_out, kernel_size, stride=stride, padding=padding, bias=True, dilation=dilation)
+        self.conv_0 = Conv2D(
+            C_in,
+            C_out,
+            kernel_size,
+            stride=stride,
+            padding=padding,
+            bias=True,
+            dilation=dilation,
+        )
 
     def forward(self, x):
         """
@@ -135,7 +193,7 @@ class BNSwishConv(nn.Module):
         """
         out = self.bn_act(x)
         if self.upsample:
-            out = F.interpolate(out, scale_factor=2, mode='nearest')
+            out = F.interpolate(out, scale_factor=2, mode="nearest")
         out = self.conv_0(out)
         return out
 
@@ -147,11 +205,13 @@ class FactorizedReduce(nn.Module):
         self.conv_1 = Conv2D(C_in, C_out // 4, 1, stride=2, padding=0, bias=True)
         self.conv_2 = Conv2D(C_in, C_out // 4, 1, stride=2, padding=0, bias=True)
         self.conv_3 = Conv2D(C_in, C_out // 4, 1, stride=2, padding=0, bias=True)
-        self.conv_4 = Conv2D(C_in, C_out - 3 * (C_out // 4), 1, stride=2, padding=0, bias=True)
+        self.conv_4 = Conv2D(
+            C_in, C_out - 3 * (C_out // 4), 1, stride=2, padding=0, bias=True
+        )
 
     def forward(self, x):
         out = act(x)
-        conv1 = self.conv_1(out[:,:,:, :])
+        conv1 = self.conv_1(out[:, :, :, :])
         conv2 = self.conv_2(out[:, :, 1:, :])
         conv3 = self.conv_3(out[:, :, :, :])
         conv4 = self.conv_4(out[:, :, 1:, :])
@@ -165,7 +225,7 @@ class UpSample(nn.Module):
         pass
 
     def forward(self, x):
-        return F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=True)
+        return F.interpolate(x, scale_factor=2, mode="bilinear", align_corners=True)
 
 
 class EncCombinerCell(nn.Module):
@@ -186,7 +246,9 @@ class DecCombinerCell(nn.Module):
     def __init__(self, Cin1, Cin2, Cout, cell_type):
         super(DecCombinerCell, self).__init__()
         self.cell_type = cell_type
-        self.conv = Conv2D(Cin1 + Cin2, Cout, kernel_size=1, stride=1, padding=0, bias=True)
+        self.conv = Conv2D(
+            Cin1 + Cin2, Cout, kernel_size=1, stride=1, padding=0, bias=True
+        )
 
     def forward(self, x1, x2):
         out = torch.cat([x1, x2], dim=1)
@@ -200,8 +262,20 @@ class ConvBNSwish(nn.Module):
         super(ConvBNSwish, self).__init__()
 
         self.conv = nn.Sequential(
-            Conv2D(Cin, Cout, k, stride, padding, groups=groups, bias=False, dilation=dilation, weight_norm=False),
-            SyncBatchNormSwish(Cout, eps=BN_EPS, momentum=0.05)  # drop in replacement for BN + Swish
+            Conv2D(
+                Cin,
+                Cout,
+                k,
+                stride,
+                padding,
+                groups=groups,
+                bias=False,
+                dilation=dilation,
+                weight_norm=False,
+            ),
+            SyncBatchNormSwish(
+                Cout, eps=BN_EPS, momentum=0.05
+            ),  # drop in replacement for BN + Swish
         )
 
     def forward(self, x):
@@ -221,11 +295,20 @@ class InvertedResidual(nn.Module):
         groups = hidden_dim if g == 0 else g
 
         layers0 = [nn.UpsamplingNearest2d(scale_factor=2)] if self.upsample else []
-        layers = [get_batchnorm(Cin, eps=BN_EPS, momentum=0.05),
-                  ConvBNSwish(Cin, hidden_dim, k=1),
-                  ConvBNSwish(hidden_dim, hidden_dim, stride=self.stride, groups=groups, k=k, dilation=dil),
-                  Conv2D(hidden_dim, Cout, 1, 1, 0, bias=False, weight_norm=False),
-                  get_batchnorm(Cout, momentum=0.05)]
+        layers = [
+            get_batchnorm(Cin, eps=BN_EPS, momentum=0.05),
+            ConvBNSwish(Cin, hidden_dim, k=1),
+            ConvBNSwish(
+                hidden_dim,
+                hidden_dim,
+                stride=self.stride,
+                groups=groups,
+                k=k,
+                dilation=dil,
+            ),
+            Conv2D(hidden_dim, Cout, 1, 1, 0, bias=False, weight_norm=False),
+            get_batchnorm(Cout, momentum=0.05),
+        ]
 
         layers0.extend(layers)
         self.conv = nn.Sequential(*layers0)
@@ -260,38 +343,54 @@ class MambaOp(nn.Module):
         super().__init__()
         # MambaOp solo soporta stride=1 (las ops normal_enc/normal_dec son stride=1)
         # Si Cin != Cout necesitamos adaptar canales primero
-        self.adapt = nn.Identity() if Cin == Cout else nn.Conv2d(Cin, Cout, kernel_size=1, bias=False)
+        self.adapt = (
+            nn.Identity()
+            if Cin == Cout
+            else nn.Conv2d(Cin, Cout, kernel_size=1, bias=False)
+        )
         C = Cout
 
         # Mamba SSM params — valores conservadores para caber en GPU pequeña
-        d_state = 16           # dimension del estado SSM
-        d_conv  = 4           # kernel causal
+        d_state = 16  # dimension del estado SSM
+        d_conv = 4  # kernel causal
         d_inner = max(C, 16)  # dimension interna del bloque Mamba (conv1d + SSM)
 
         # Forward SSM
-        self.fwd_in    = nn.Linear(C, d_inner * 2, bias=False)
-        self.fwd_conv  = nn.Conv1d(d_inner, d_inner, d_conv, padding=d_conv-1, groups=d_inner, bias=True)
+        self.fwd_in = nn.Linear(C, d_inner * 2, bias=False)
+        self.fwd_conv = nn.Conv1d(
+            d_inner, d_inner, d_conv, padding=d_conv - 1, groups=d_inner, bias=True
+        )
         self.fwd_xproj = nn.Linear(d_inner, 1 + d_state * 2, bias=False)
-        self.fwd_dt    = nn.Linear(1, d_inner, bias=True)
-        A_fwd = torch.arange(1, d_state + 1, dtype=torch.float).unsqueeze(0).expand(d_inner, -1)
+        self.fwd_dt = nn.Linear(1, d_inner, bias=True)
+        A_fwd = (
+            torch.arange(1, d_state + 1, dtype=torch.float)
+            .unsqueeze(0)
+            .expand(d_inner, -1)
+        )
         self.fwd_A_log = nn.Parameter(torch.log(A_fwd))
-        self.fwd_D     = nn.Parameter(torch.ones(d_inner))
-        self.fwd_out   = nn.Linear(d_inner, C, bias=False)
+        self.fwd_D = nn.Parameter(torch.ones(d_inner))
+        self.fwd_out = nn.Linear(d_inner, C, bias=False)
 
         # Backward SSM (pesos independientes)
-        self.bwd_in    = nn.Linear(C, d_inner * 2, bias=False)
-        self.bwd_conv  = nn.Conv1d(d_inner, d_inner, d_conv, padding=d_conv-1, groups=d_inner, bias=True)
+        self.bwd_in = nn.Linear(C, d_inner * 2, bias=False)
+        self.bwd_conv = nn.Conv1d(
+            d_inner, d_inner, d_conv, padding=d_conv - 1, groups=d_inner, bias=True
+        )
         self.bwd_xproj = nn.Linear(d_inner, 1 + d_state * 2, bias=False)
-        self.bwd_dt    = nn.Linear(1, d_inner, bias=True)
-        A_bwd = torch.arange(1, d_state + 1, dtype=torch.float).unsqueeze(0).expand(d_inner, -1)
+        self.bwd_dt = nn.Linear(1, d_inner, bias=True)
+        A_bwd = (
+            torch.arange(1, d_state + 1, dtype=torch.float)
+            .unsqueeze(0)
+            .expand(d_inner, -1)
+        )
         self.bwd_A_log = nn.Parameter(torch.log(A_bwd))
-        self.bwd_D     = nn.Parameter(torch.ones(d_inner))
-        self.bwd_out   = nn.Linear(d_inner, C, bias=False)
+        self.bwd_D = nn.Parameter(torch.ones(d_inner))
+        self.bwd_out = nn.Linear(d_inner, C, bias=False)
 
         # Post-processing
         self.norm1 = nn.LayerNorm(C)
         self.norm2 = nn.LayerNorm(C)
-        self.ffn   = nn.Sequential(
+        self.ffn = nn.Sequential(
             nn.Linear(C, C * 2),
             nn.SiLU(),
             nn.Linear(C * 2, C),
@@ -304,34 +403,38 @@ class MambaOp(nn.Module):
         d_state = (xproj.out_features - 1) // 2
 
         # 1) proyeccion entrada
-        xz  = in_proj(x)                                  # (BW, L, d_inner*2)
+        xz = in_proj(x)  # (BW, L, d_inner*2)
         xi, gate = xz.split(d_inner, dim=-1)
 
         # 2) conv causal sobre L
-        xi = F.silu(conv1d(xi.transpose(1, 2))[..., :L].transpose(1, 2))  # (BW, L, d_inner)
+        xi = F.silu(
+            conv1d(xi.transpose(1, 2))[..., :L].transpose(1, 2)
+        )  # (BW, L, d_inner)
 
         # 3) SSM proyection: delta (1), B (d_state), C_ssm (d_state)
-        dBC   = xproj(xi)                                 # (BW, L, 1+2*d_state)
-        delta = F.softplus(dt_proj(dBC[..., :1]))         # (BW, L, d_inner)
-        B_ssm = dBC[..., 1:1+d_state]                    # (BW, L, d_state)
-        C_ssm = dBC[..., 1+d_state:]                     # (BW, L, d_state)
+        dBC = xproj(xi)  # (BW, L, 1+2*d_state)
+        delta = F.softplus(dt_proj(dBC[..., :1]))  # (BW, L, d_inner)
+        B_ssm = dBC[..., 1 : 1 + d_state]  # (BW, L, d_state)
+        C_ssm = dBC[..., 1 + d_state :]  # (BW, L, d_state)
 
         # 4) Selective scan discreto
-        A  = -torch.exp(A_log.float())                    # (d_inner, d_state)
-        dA = torch.exp(torch.einsum('bld,dn->bldn', delta, A))       # (BW,L,d_inner,d_state)
-        dBu = torch.einsum('bld,bln,bld->bldn', delta, B_ssm, xi)   # (BW,L,d_inner,d_state)
+        A = -torch.exp(A_log.float())  # (d_inner, d_state)
+        dA = torch.exp(torch.einsum("bld,dn->bldn", delta, A))  # (BW,L,d_inner,d_state)
+        dBu = torch.einsum(
+            "bld,bln,bld->bldn", delta, B_ssm, xi
+        )  # (BW,L,d_inner,d_state)
 
         h = torch.zeros(BW, d_inner, d_state, device=x.device, dtype=x.dtype)
         ys = []
         for i in range(L):
             h = dA[:, i] * h + dBu[:, i]
-            y = torch.einsum('bdn,bn->bd', h, C_ssm[:, i])
+            y = torch.einsum("bdn,bn->bd", h, C_ssm[:, i])
             ys.append(y)
-        y = torch.stack(ys, dim=1)                        # (BW, L, d_inner)
+        y = torch.stack(ys, dim=1)  # (BW, L, d_inner)
         y = y + xi * D
 
         # 5) gate + salida
-        return out_proj(y * F.silu(gate))                 # (BW, L, C)
+        return out_proj(y * F.silu(gate))  # (BW, L, C)
 
     def forward(self, x):
         """x: (B, C, H, W) → (B, C, H, W)"""
@@ -342,14 +445,28 @@ class MambaOp(nn.Module):
         seq = x.permute(0, 3, 2, 1).reshape(B * W, H, C)
 
         # brazo forward
-        y_fwd = self._ssm_branch(seq,
-            self.fwd_in, self.fwd_conv, self.fwd_xproj,
-            self.fwd_dt, self.fwd_A_log, self.fwd_D, self.fwd_out)
+        y_fwd = self._ssm_branch(
+            seq,
+            self.fwd_in,
+            self.fwd_conv,
+            self.fwd_xproj,
+            self.fwd_dt,
+            self.fwd_A_log,
+            self.fwd_D,
+            self.fwd_out,
+        )
 
         # brazo backward: invertir H, SSM, volver a invertir
-        y_bwd = self._ssm_branch(seq.flip(1),
-            self.bwd_in, self.bwd_conv, self.bwd_xproj,
-            self.bwd_dt, self.bwd_A_log, self.bwd_D, self.bwd_out).flip(1)
+        y_bwd = self._ssm_branch(
+            seq.flip(1),
+            self.bwd_in,
+            self.bwd_conv,
+            self.bwd_xproj,
+            self.bwd_dt,
+            self.bwd_A_log,
+            self.bwd_D,
+            self.bwd_out,
+        ).flip(1)
 
         # combinar + residual + LayerNorm
         y = self.norm1(y_fwd + y_bwd + seq)
