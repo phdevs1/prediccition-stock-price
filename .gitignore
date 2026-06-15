@@ -6,6 +6,10 @@ checkpoints/
 # Dataset directories (often large; track only if you explicitly commit data)
 data/
 data_2/
+data_3/
+data_processed/
+
+idea/
 
 # Python cache and bytecode
 __pycache__/

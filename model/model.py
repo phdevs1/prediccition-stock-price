@@ -31,9 +31,11 @@ class diffusion_generate(nn.Module):
             diff_steps=args.diff_steps,
             beta_end=args.beta_end,
             beta_schedule=args.beta_schedule,
-            scale = args.scale,
+            scale=args.scale,
         )
-        self.projection = nn.Linear(args.embedding_dimension+args.hidden_size, args.embedding_dimension)
+        self.projection = nn.Linear(
+            args.embedding_dimension + args.hidden_size, args.embedding_dimension
+        )
 
     def forward(self, past_time_feat, future_time_feat, t):
         time_feat, _ = self.rnn(past_time_feat)
@@ -50,18 +52,24 @@ class denoise_net(nn.Module):
         self.score_net = Res12_Quadratic(1, 64, 32, normalize=False, AF=nn.ELU())
 
         # Generate the diffusion schedule.
-        sigmas = get_beta_schedule(args.beta_schedule, args.beta_start, args.beta_end, args.diff_steps)
-        alphas = 1.0 - sigmas*0.5
+        sigmas = get_beta_schedule(
+            args.beta_schedule, args.beta_start, args.beta_end, args.diff_steps
+        )
+        alphas = 1.0 - sigmas * 0.5
         self.alphas_cumprod = torch.tensor(np.cumprod(alphas, axis=0))
         self.sqrt_alphas_cumprod = torch.tensor(np.sqrt(np.cumprod(alphas, axis=0)))
-        self.sqrt_one_minus_alphas_cumprod = torch.tensor(np.sqrt(1-np.cumprod(alphas, axis=0)))
-        self.sigmas = torch.tensor(1. - self.alphas_cumprod)
+        self.sqrt_one_minus_alphas_cumprod = torch.tensor(
+            np.sqrt(1 - np.cumprod(alphas, axis=0))
+        )
+        self.sigmas = torch.tensor(1.0 - self.alphas_cumprod)
 
         # The generative bvae model.
         self.diffusion_gen = diffusion_generate(args)
 
         # Data embedding module.
-        self.embedding = DataEmbedding(args.input_dim, args.embedding_dimension, args.dropout_rate)
+        self.embedding = DataEmbedding(
+            args.input_dim, args.embedding_dimension, args.dropout_rate
+        )
 
     def extract(self, a, t, x_shape):
         b, *_ = t.shape
@@ -83,7 +91,9 @@ class denoise_net(nn.Module):
 
         # The Loss of multiscale score matching.
         grad_x = torch.autograd.grad(E, y_noisy1, create_graph=True)[0]
-        dsm_loss = torch.mean(torch.sum(((y-y_noisy1.detach())+grad_x*1)**2*sigmas_t, [1,2,3])).float()
+        dsm_loss = torch.mean(
+            torch.sum(((y - y_noisy1.detach()) + grad_x * 1) ** 2 * sigmas_t, [1, 2, 3])
+        ).float()
         return output, y_noisy, dsm_loss
 
 
@@ -99,7 +109,7 @@ class pred_net(denoise_net):
 
         E = self.score_net(y).sum()
         grad_x = torch.autograd.grad(E, y, create_graph=True)[0]
-        out = y - grad_x*1
+        out = y - grad_x * 1
         return y, out
 
 
