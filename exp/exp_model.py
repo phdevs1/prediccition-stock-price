@@ -201,11 +201,11 @@ class Exp_Model(object):
         mse = np.mean((preds - trues) ** 2)
         print("mse:{}".format(mse))
 
-        # folder_path = './results/' + setting +'/'
-        # if not os.path.exists(folder_path):
-        #     os.makedirs(folder_path)
-        # np.save(folder_path + 'pred.npy', preds)
-        # np.save(folder_path + 'noisy.npy', noisy)
-        # np.save(folder_path + 'true.npy', trues)
-        # np.save(folder_path + 'input.npy', input)
+        folder_path = './results/' + setting +'/'
+        if not os.path.exists(folder_path):
+            os.makedirs(folder_path)
+        np.save(folder_path + 'pred.npy', preds)
+        np.save(folder_path + 'noisy.npy', noisy)
+        np.save(folder_path + 'true.npy', trues)
+        np.save(folder_path + 'input.npy', input)
         return mse
