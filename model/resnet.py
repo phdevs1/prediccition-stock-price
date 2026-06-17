@@ -1,16 +1,6 @@
 # -*-Encoding: utf-8 -*-
 from torch import nn
-from torch.autograd import grad
 import torch
-
-
-def weights_init(m):
-    classname = m.__class__.__name__
-    if classname.find("Conv") != -1:
-        m.weight.data.normal_(0.0, 0.2)
-    elif classname.find("BatchNorm") != -1:
-        m.weight.data.normal_(1.0, 0.2)
-        m.bias.data.fill_(0)
 
 
 class MyConvo2d(nn.Module):
@@ -38,15 +28,6 @@ class Square(nn.Module):
 
     def forward(self, in_vect):
         return in_vect**2
-
-
-class Swish(nn.Module):
-    def __init__(self):
-        super(Swish, self).__init__()
-        pass
-
-    def forward(self, in_vect):
-        return in_vect * nn.functional.sigmoid(in_vect)
 
 
 class MeanPoolConv(nn.Module):

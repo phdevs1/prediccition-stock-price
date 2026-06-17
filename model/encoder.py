@@ -1,10 +1,8 @@
 # -*-Encoding: utf-8 -*-
-import time
 import math
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from .neural_operations import (
     OPS,
     EncCombinerCell,
@@ -14,8 +12,6 @@ from .neural_operations import (
 )
 from .utils import (
     get_stride_for_cell_type,
-    get_input_size,
-    groups_per_scale,
     get_arch_cells,
 )
 
@@ -70,9 +66,6 @@ class Normal:
     def sample(self):
         return sample_normal_jit(self.mu, self.sigma)
 
-    def sample_given_eps(self, eps):
-        return eps * self.sigma + self.mu
-
     def log_p(self, samples):
         normalized_samples = (samples - self.mu) / self.sigma
         log_p = (
@@ -81,11 +74,6 @@ class Normal:
             - torch.log(self.sigma)
         )
         return log_p
-
-    def kl(self, normal_dist):
-        term1 = (self.mu - normal_dist.mu) / normal_dist.sigma
-        term2 = self.sigma / normal_dist.sigma
-        return 0.5 * (term1 * term1 + term2 * term2) - 0.5 - torch.log(term2)
 
 
 class NormalDecoder:
@@ -105,19 +93,6 @@ class NormalDecoder:
     ):
         x, _ = self.dist.sample()
         return x
-
-
-def log_density_gaussian(sample, mu, logvar):
-    normalization = -0.5 * (math.log(2 * math.pi) + logvar)
-    inv_var = torch.exp(-logvar)
-    log_density = normalization - 0.5 * ((sample - mu) ** 2 * inv_var)
-    log_qz = torch.logsumexp(torch.sum(log_density, [2, 3]), dim=1, keepdim=False)
-    log_prod_qzi = torch.logsumexp(log_density, dim=1, keepdim=False).sum((1, 2))
-    loss_p_z = log_qz - log_prod_qzi
-    loss_p_z = (
-        (loss_p_z - torch.min(loss_p_z)) / (torch.max(loss_p_z) - torch.min(loss_p_z))
-    ).mean()
-    return loss_p_z
 
 
 class Encoder(nn.Module):

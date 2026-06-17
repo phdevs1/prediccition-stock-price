@@ -1,23 +1,14 @@
 # -*-Encoding: utf-8 -*-
 from data_load.data_loader import Dataset_Custom
 from model.model import diffusion_generate, denoise_net, pred_net
-from torch.optim.lr_scheduler import OneCycleLR, StepLR
-
 from gluonts.torch.util import copy_parameters
 from utils.tools import EarlyStopping, adjust_learning_rate
-from model.resnet import Res12_Quadratic
-from model.diffusion_process import GaussianDiffusion
-
-from model.encoder import Encoder
 from model.embedding import DataEmbedding
 import numpy as np
-import math
-import collections
 import torch
 import torch.nn as nn
 from torch import optim
 from torch.utils.data import DataLoader
-import torch.nn.functional as F
 
 import os
 import time
@@ -94,7 +85,6 @@ class Exp_Model(object):
     def vali(self, vali_data, vali_loader, criterion):
         copy_parameters(self.denoise_net, self.pred_net)
         total_mse = []
-        total_mae = []
 
         for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(vali_loader):
             batch_x = batch_x.float().to(self.device)
@@ -118,8 +108,6 @@ class Exp_Model(object):
         early_stopping = EarlyStopping(patience=self.args.patience, verbose=True)
         denoise_optim = self._select_optimizer()
         criterion = self._select_criterion()
-        train = []
-
         for epoch in range(self.args.train_epochs):
             mse = []
             kl = []
@@ -154,7 +142,6 @@ class Exp_Model(object):
                 if i % 40 == 0:
                     print(loss)
             all_loss = np.average(all_loss)
-            train.append(all_loss)
             kl = np.average(kl)
             dsm = np.average(dsm)
             mse = np.average(mse)
