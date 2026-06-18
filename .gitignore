@@ -11,7 +11,9 @@ data_processed/
 data_processed_ln/
 data_processed_ln_2/
 results2/
-
+results_data_2016/
+results_data_2016_ln/
+checkpoints_data_2016_ln
 idea/
 
 # Python cache and bytecode
