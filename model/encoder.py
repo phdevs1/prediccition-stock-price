@@ -1,5 +1,4 @@
 # -*-Encoding: utf-8 -*-
-import math
 import numpy as np
 import torch
 import torch.nn as nn
@@ -49,9 +48,7 @@ def soft_clamp5(x: torch.Tensor):
 
 def sample_normal_jit(mu, sigma):
     eps = mu.mul(0).normal_()
-    # print(eps)
     z = eps.mul_(sigma).add_(mu)
-    # print(z.shape)
     return z, eps
 
 
@@ -74,6 +71,12 @@ class Normal:
             - torch.log(self.sigma)
         )
         return log_p
+
+    def kl(self, prior):
+        """KL(self || prior) por elemento, entre dos Normales (estilo NVAE)."""
+        term1 = (self.mu - prior.mu) / prior.sigma
+        term2 = self.sigma / prior.sigma
+        return 0.5 * (term1 * term1 + term2 * term2) - 0.5 - torch.log(term2)
 
 
 class NormalDecoder:
@@ -98,6 +101,10 @@ class NormalDecoder:
 class Encoder(nn.Module):
     def __init__(self, args):
         super(Encoder, self).__init__()
+
+        # KL latente acumulada en el ultimo forward (por-batch). Se lee desde el
+        # bucle de entrenamiento sin alterar la firma de forward.
+        self.kl_loss = None
 
         self.channel_mult = args.channel_mult
         self.mult = args.mult
@@ -131,11 +138,6 @@ class Encoder(nn.Module):
         self.prior_ftr0 = nn.Parameter(
             torch.rand(size=prior_ftr0_size), requires_grad=True
         )
-        self.z0_size = [
-            self.num_latent_per_group,
-            args.prediction_length // spatial_scaling,
-            (args.embedding_dimension + args.hidden_size + 1) // spatial_scaling,
-        ]
 
         self.pre_process = self.init_pre_process(args.mult)
         self.enc_tower = self.init_encoder_tower(self.mult)
@@ -159,13 +161,6 @@ class Encoder(nn.Module):
         self.image_conditional = nn.Sequential(
             nn.ELU(),
             Conv2D(int(self.num_channels_dec * self.mult), 2, 3, padding=1, bias=True),
-        )
-        self.rnn = nn.GRU(
-            input_size=args.sequence_length,
-            hidden_size=args.prediction_length,
-            num_layers=args.num_layers,
-            dropout=args.dropout_rate,
-            batch_first=True,
         )
 
     def init_pre_process(self, mult):
@@ -228,7 +223,6 @@ class Encoder(nn.Module):
                     num_c, num_c, cell_type="normal_dec", arch=arch, use_se=self.use_se
                 )
                 dec_tower.append(cell)
-            # print(num_c)
             cell = DecCombinerCell(
                 num_c, self.num_latent_per_group, num_c, cell_type="combiner_dec"
             )
@@ -296,12 +290,12 @@ class Encoder(nn.Module):
         return post_process
 
     def forward(self, x):
-        s = self.stem(2 * x - 1.0)
+        s = self.stem(x)
         for cell in self.pre_process:
             s = cell(s)
         combiner_cells_enc = []
         combiner_cells_s = []
-        all_z = []
+        kl_all = []
         for cell in self.enc_tower:
             if cell.cell_type == "combiner_enc":
                 combiner_cells_enc.append(cell)
@@ -310,30 +304,33 @@ class Encoder(nn.Module):
                 s = cell(s)
         combiner_cells_enc.reverse()
         combiner_cells_s.reverse()
-        idx_dec = 0
-        ftr = self.enc0(s)  # conv
-        param0 = self.enc_sampler[idx_dec](ftr)  # another conv2d
+
+        ftr = self.enc0(s)
+        param0 = self.enc_sampler[0](ftr)
         mu_q, log_sig_q = torch.chunk(param0, 2, dim=1)
         dist = Normal(mu_q, log_sig_q)
-        z, _ = dist.sample()  # z_0
-        all_z.append(z)
-        idx_dec = 0
-        s = self.prior_ftr0.unsqueeze(0)  # random value
-        batch_size = z.size(0)
-        s = s.expand(batch_size, -1, -1, -1)
+        z, _ = dist.sample()
+        prior0 = Normal(torch.zeros_like(mu_q), torch.zeros_like(log_sig_q))
+        kl_all.append(torch.sum(dist.kl(prior0), dim=[1, 2, 3]))
+
+        s = self.prior_ftr0.unsqueeze(0).expand(z.size(0), -1, -1, -1)
         idx_dec = 0
         for cell in self.dec_tower:
             if cell.cell_type == "combiner_dec":
                 if idx_dec > 0:
+                    # Prior p(z_n) a partir de las features del decoder (dec_sampler)
+                    prior_param = self.dec_sampler[idx_dec - 1](s)
+                    mu_p, log_sig_p = torch.chunk(prior_param, 2, dim=1)
+                    prior = Normal(mu_p, log_sig_p)
+                    # Posterior q(z_n) a partir de las features del encoder combinadas
                     ftr = combiner_cells_enc[idx_dec - 1](
                         combiner_cells_s[idx_dec - 1], s
                     )
                     param = self.enc_sampler[idx_dec](ftr)
                     mu_q, log_sig_q = torch.chunk(param, 2, dim=1)
                     dist = Normal(mu_q, log_sig_q)
-                    z, _ = dist.sample()  # z_n
-                    all_z.append(z)
-                    # print(z.shape)
+                    z, _ = dist.sample()
+                    kl_all.append(torch.sum(dist.kl(prior), dim=[1, 2, 3]))
                 s = cell(s, z)
                 idx_dec += 1
             else:
@@ -341,9 +338,10 @@ class Encoder(nn.Module):
 
         for cell in self.post_process:
             s = cell(s)
-        # print(s.shape)
         logits = self.image_conditional(s)
         logits = self.projection(logits[..., -(self.input_size + self.hidden_size) :])
+
+        self.kl_loss = torch.stack(kl_all, dim=0).sum(dim=0)
         return logits
 
     def decoder_output(self, logits):

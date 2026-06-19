@@ -40,10 +40,8 @@ def default(val, d):
 
 
 def extract(a, t, x_shape):
-    # print(a.shape, t.shape)
     b, *_ = t.shape
     out = a.gather(-1, t)
-    # print(out.shape)
     return out.reshape(b, *((1,) * (len(x_shape) - 1)))
 
 
@@ -62,16 +60,9 @@ class GaussianDiffusion(nn.Module):
         super().__init__()
         self.generative = bvae
         self.scale = scale
-        self.beta_start = beta_start
-        self.beta_end = beta_end
         betas = get_beta_schedule(beta_schedule, beta_start, beta_end, diff_steps)
-        alphas = 1.0 - betas
-        alphas_cumprod = np.cumprod(alphas, axis=0)
-
-        alphas_target = 1.0 - betas * scale
-        alphas_target_cumprod = np.cumprod(alphas_target, axis=0)
-        self.alphas_target = alphas_target
-        self.alphas_target_cumprod = alphas_target_cumprod
+        alphas_cumprod = np.cumprod(1.0 - betas, axis=0)
+        alphas_target_cumprod = np.cumprod(1.0 - betas * scale, axis=0)
 
         (timesteps,) = betas.shape
         self.num_timesteps = int(timesteps)

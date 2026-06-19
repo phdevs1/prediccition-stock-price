@@ -12,7 +12,18 @@ warnings.filterwarnings('ignore')
 
 RESULTS_DIR = './results'
 
-def load_all_predictions(pattern='*_tp2016_sl10'):
+def sharpe(rets, eps=1e-12):
+    """Sharpe ratio (rf=0). Guarda contra std=0."""
+    rets = np.asarray(rets)
+    s = rets.std()
+    return rets.mean() / s if s > eps else 0.0
+
+
+def load_all_predictions(pattern='*_tp2016_sl10', real_returns=True):
+    """Carga predicciones y targets por ticker. Si real_returns=True y existen los
+    estadisticos del scaler (target_mean/std.npy guardados por Exp_Model.test),
+    invierte la estandarizacion para trabajar en unidades de retorno REAL. Las
+    series se truncan al mismo numero de ventanas (min N) para poder apilarlas."""
     folders = sorted(glob(os.path.join(RESULTS_DIR, pattern)))
     tickers = []
     preds = []
@@ -21,9 +32,20 @@ def load_all_predictions(pattern='*_tp2016_sl10'):
         ticker = os.path.basename(f).replace('_tp2016_sl10', '')
         p = np.load(os.path.join(f, 'pred.npy'))
         t = np.load(os.path.join(f, 'true.npy'))
+        if real_returns:
+            mpath = os.path.join(f, 'target_mean.npy')
+            spath = os.path.join(f, 'target_std.npy')
+            if os.path.exists(mpath) and os.path.exists(spath):
+                mean = np.load(mpath).reshape(-1)[0]
+                std = np.load(spath).reshape(-1)[0]
+                p = p * std + mean
+                t = t * std + mean
         tickers.append(ticker)
         preds.append(p)
         trues.append(t)
+    min_n = min(p.shape[0] for p in preds)
+    preds = [p[:min_n] for p in preds]
+    trues = [t[:min_n] for t in trues]
     P = np.stack(preds, axis=0)
     T = np.stack(trues, axis=0)
     return tickers, P, T
@@ -142,33 +164,53 @@ def main():
     true_avg_all = T[:, :, :, 0].mean(axis=(1,2))
     corr_signal = np.corrcoef(pred_avg_all, true_avg_all)[0, 1]
 
-    # Equal-weight (baseline)
-    sharpe_ew, ew_rets = equal_weight_portfolio(T)
+    # Split cronologico de ventanas: las primeras se usan para SELECCIONAR gamma
+    # (rol de validacion) y el resto para REPORTAR (test). Asi se evita el
+    # look-ahead de elegir gamma maximizando el Sharpe del propio test.
+    N = P.shape[1]
+    n_val = max(1, int(N * 0.3))
+    val_sl = slice(0, n_val)
+    test_sl = slice(n_val, N)
 
-    # D-Va with global covariance + graphical lasso
+    # Equal-weight (baseline), reportado en el tramo de test
+    _, ew_rets_all = equal_weight_portfolio(T)
+    sharpe_ew = sharpe(ew_rets_all[test_sl])
+    ew_rets = ew_rets_all[test_sl]
+
+    # D-Va con covarianza global + graphical lasso
     gammas_test = [0.1, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000]
-    best_sharpe_reg = -np.inf
-    best_gamma_reg = None
-    best_rets_reg = None
-    best_w_reg = None
-    best_sharpe_noreg = None
 
+    # 1) Seleccion de gamma en VALIDACION (sin mirar el test)
+    best_gamma_reg = None
+    best_sharpe_val = -np.inf
     for g in gammas_test:
-        s_reg, rets_reg, w_reg, s_noreg, rets_noreg, w_noreg = \
-            run_portfolio(P, T, gamma=g, lambda_gl=0.1, use_global_cov=True)
-        if s_reg > best_sharpe_reg:
-            best_sharpe_reg = s_reg
+        _, rets_reg, _, _, _, _ = run_portfolio(
+            P, T, gamma=g, lambda_gl=0.1, use_global_cov=True
+        )
+        s_val = sharpe(rets_reg[val_sl])
+        if s_val > best_sharpe_val:
+            best_sharpe_val = s_val
             best_gamma_reg = g
-            best_rets_reg = rets_reg
-            best_w_reg = w_reg
-            best_sharpe_noreg = s_noreg
+
+    # 2) Reporte en TEST con el gamma elegido
+    _, rets_reg, best_w_reg, _, rets_noreg, _ = run_portfolio(
+        P, T, gamma=best_gamma_reg, lambda_gl=0.1, use_global_cov=True
+    )
+    best_sharpe_reg = sharpe(rets_reg[test_sl])
+    best_sharpe_noreg = sharpe(rets_noreg[test_sl])
+    best_rets_reg = rets_reg[test_sl]
 
     print(f'\n  Modelo                Sharpe (reg)   Sharpe (no reg)')
     print(f'  ' + '-' * 50)
     print(f'  Equal-weight (1/{S})    {sharpe_ew:.4f}        {sharpe_ew:.4f}')
-    print(f'  D-Va (γ={best_gamma_reg:<5d})        {best_sharpe_reg:.4f}        {best_sharpe_noreg:.4f}')
+    print(f'  D-Va (gamma={best_gamma_reg})       {best_sharpe_reg:.4f}        {best_sharpe_noreg:.4f}')
+    print(f'  (gamma elegido en validacion; Sharpe reportado en test)')
 
-    mejora = (best_sharpe_reg - sharpe_ew) / abs(sharpe_ew) * 100
+    mejora = (
+        (best_sharpe_reg - sharpe_ew) / abs(sharpe_ew) * 100
+        if sharpe_ew != 0
+        else float('nan')
+    )
     print(f'  Mejora D-Va vs EW:     {mejora:+.1f}%')
 
     n_activos = (best_w_reg.mean(axis=0) > 0.001).sum()

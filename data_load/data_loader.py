@@ -3,7 +3,7 @@ import os
 import pandas as pd
 
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 from utils.timefeatures import time_features
 import warnings
 
@@ -19,27 +19,29 @@ class StandardScaler(object):
         self.mean = data.mean(0)
         self.std = data.std(0)
 
+    def _coerce(self, arr, ref):
+        if torch.is_tensor(ref):
+            return torch.from_numpy(arr).type_as(ref).to(ref.device)
+        return arr
+
     def transform(self, data):
-        mean = (
-            torch.from_numpy(self.mean).type_as(data).to(data.device)
-            if torch.is_tensor(data)
-            else self.mean
-        )
-        std = (
-            torch.from_numpy(self.std).type_as(data).to(data.device)
-            if torch.is_tensor(data)
-            else self.std
-        )
-        return (data - mean) / std
+        return (data - self._coerce(self.mean, data)) / self._coerce(self.std, data)
+
+    def inverse_transform(self, data):
+        return data * self._coerce(self.std, data) + self._coerce(self.mean, data)
 
 
 class Dataset_Custom(Dataset):
-    def __init__(self, root_path, flag="train", size=None, data_path="AAPL.csv"):
-        # size [seq_len, label_len, pred_len]
-        # info
+    def __init__(
+        self,
+        root_path,
+        flag="train",
+        size=None,
+        data_path="AAPL.csv",
+    ):
+        # size [seq_len, pred_len]
         self.seq_len = size[0]
         self.pred_len = size[1]
-        # init
         assert flag in ["train", "test", "val"]
         type_map = {"train": 0, "val": 1, "test": 2}
         self.set_type = type_map[flag]
@@ -61,28 +63,40 @@ class Dataset_Custom(Dataset):
         border1 = border1s[self.set_type]
         border2 = border2s[self.set_type]
 
-        cols_data = df_raw.columns[1:]
-        df_data = df_raw[cols_data]
+        all_cols = list(df_raw.columns[1:])  # todas menos 'date'
+        target_col = all_cols[-1]  # target_return (ultima columna)
+        feature_cols = all_cols[:-1]  # features de entrada, sin target_return
 
-        train_data = df_data[border1s[0] : border2s[0]]
-        self.scaler.fit(train_data.values)
-        data = self.scaler.transform(df_data.values)
+        df_features = df_raw[feature_cols]
+        df_target = df_raw[[target_col]]
+
+        # StandardScaler ajustado SOLO en train (features) y aplicado a toda la serie.
+        self.scaler.fit(df_features[border1s[0] : border2s[0]].values)
+        data_x = self.scaler.transform(df_features.values)
+
+        # Target estandarizado con su propia estadistica de train. Guardamos
+        # mean/std para poder invertir a retornos reales (portafolio / metricas).
+        target_train = df_target[border1s[0] : border2s[0]].values
+        self.target_mean = target_train.mean(0)
+        self.target_std = target_train.std(0)
+        self.target_std = self.target_std.clip(min=1e-8)  # evita division por cero
+        data_y = (df_target.values - self.target_mean) / self.target_std
 
         df_stamp = pd.DatetimeIndex(df_raw[border1:border2]["date"])
         data_stamp = time_features(df_stamp)
 
-        self.data_x = data[border1:border2]
-        self.data_y = data[border1:border2]
+        self.data_x = data_x[border1:border2]
+        self.data_y = data_y[border1:border2]
         self.data_stamp = data_stamp
 
     def __getitem__(self, index):
         s_begin = index
         s_end = s_begin + self.seq_len
-        r_begin = s_end
+        r_begin = s_end - 1  # target_return[s_end-1]: primer retorno del horizonte
         r_end = r_begin + self.pred_len
 
         seq_x = self.data_x[s_begin:s_end]
-        seq_y = self.data_y[r_begin:r_end, -1:]
+        seq_y = self.data_y[r_begin:r_end]
         seq_x_mark = self.data_stamp[s_begin:s_end]
         seq_y_mark = self.data_stamp[r_begin:r_end]
 
@@ -90,3 +104,9 @@ class Dataset_Custom(Dataset):
 
     def __len__(self):
         return len(self.data_x) - self.seq_len - self.pred_len + 1
+
+    @staticmethod
+    def feature_dim(root_path, data_path):
+        """Numero de features de entrada para un CSV dado (excluye date y target_return)."""
+        sample = pd.read_csv(os.path.join(root_path, data_path), nrows=1)
+        return sum(1 for c in sample.columns if c.lower() not in ("date", "target_return"))

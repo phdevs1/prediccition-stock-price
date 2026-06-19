@@ -22,10 +22,6 @@ class MyConvo2d(nn.Module):
 
 
 class Square(nn.Module):
-    def __init__(self):
-        super(Square, self).__init__()
-        pass
-
     def forward(self, in_vect):
         return in_vect**2
 
@@ -94,12 +90,12 @@ class ResidualBlock(nn.Module):
             self.conv_2 = MyConvo2d(input_dim, output_dim, kernel_size=kernel_size)
 
     def forward(self, input):
-        if self.input_dim == self.output_dim and self.resample == None:
+        if self.input_dim == self.output_dim and self.resample is None:
             shortcut = input
         else:
             shortcut = self.conv_shortcut(input)
 
-        if self.normalize == False:
+        if not self.normalize:
             output = input
             output = self.relu1(output)
             output = self.conv_1(output)
@@ -181,7 +177,6 @@ class Res12_Quadratic(nn.Module):
     def forward(self, x_in):
         output = x_in
         output = self.conv1(output)
-        # print(output.shape)
         output = self.rb1(output)
         output = self.rbc1(output)
         output = self.rb2(output)

@@ -10,12 +10,21 @@ data_3/
 data_processed/
 data_processed_ln/
 data_processed_ln_2/
+data
 results2/
 results_data_2016/
 results_data_2016_ln/
+result_total_2/
+result_total_3/
+result_crypto/
+papers/
+results_2_dva/
+results_result_3/
 checkpoints_data_2016_ln
 idea/
 
+portfolio_analysis.py
+portfolio_compare.py
 # Python cache and bytecode
 __pycache__/
 *.py[cod]
