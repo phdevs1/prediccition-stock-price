@@ -214,7 +214,8 @@ class Exp_Model(object):
         mse = np.mean((preds - trues) ** 2)
         print("mse:{}".format(mse))
 
-        folder_path = './results/' + setting + '/'
+        model_dir = 'bi-mamba' if getattr(self.args, 'use_bimamba', False) else 'dva'
+        folder_path = './results/' + model_dir + '/' + setting + '/'
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
         np.save(folder_path + 'pred.npy', preds)

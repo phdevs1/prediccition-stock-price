@@ -2,6 +2,7 @@
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 from .neural_operations import (
     OPS,
     EncCombinerCell,
@@ -13,6 +14,7 @@ from .utils import (
     get_stride_for_cell_type,
     get_arch_cells,
 )
+from samba.models import BIMambaCell
 
 
 class Cell(nn.Module):
@@ -40,6 +42,24 @@ class Cell(nn.Module):
         for i in range(self._num_nodes):
             s = self._ops[i](s)
         return skip + 0.1 * s
+
+
+class CellMamba(nn.Module):
+    """Drop-in replacement for normal (stride=1) Cell using BI-Mamba.
+
+    Only valid for cell types where Cin == Cout (normal_pre, normal_enc,
+    normal_dec, normal_post). Down/up cells must remain as Cell.
+    """
+
+    def __init__(self, C, cell_type, d_state: int = 8, expand: int = 1):
+        super(CellMamba, self).__init__()
+        self.cell_type = cell_type
+        self.bi_mamba = BIMambaCell(C, d_state=d_state, expand=expand)
+
+    def forward(self, s):
+        # Gradient checkpointing: recompute activations in backward instead of
+        # storing them, trading compute for memory on the large B*W effective batch.
+        return s + 0.1 * checkpoint(self.bi_mamba, s, use_reentrant=False)
 
 
 def soft_clamp5(x: torch.Tensor):
@@ -121,6 +141,9 @@ class Encoder(nn.Module):
         self.num_postprocess_blocks = args.num_postprocess_blocks
         self.num_postprocess_cells = args.num_postprocess_cells
         self.use_se = False
+        self.use_bimamba = getattr(args, "use_bimamba", False)
+        self.bimamba_d_state = getattr(args, "bimamba_d_state", 8)
+        self.bimamba_expand = getattr(args, "bimamba_expand", 1)
         self.input_size = args.embedding_dimension
         self.hidden_size = args.hidden_size
         self.projection = nn.Linear(
@@ -163,6 +186,15 @@ class Encoder(nn.Module):
             Conv2D(int(self.num_channels_dec * self.mult), 2, 3, padding=1, bias=True),
         )
 
+    def _make_normal_cell(self, num_c, cell_type, arch):
+        if self.use_bimamba:
+            return CellMamba(
+                int(num_c), cell_type,
+                d_state=self.bimamba_d_state,
+                expand=self.bimamba_expand,
+            )
+        return Cell(num_c, num_c, cell_type=cell_type, arch=arch, use_se=self.use_se)
+
     def init_pre_process(self, mult):
         pre_process = nn.ModuleList()
         for b in range(self.num_preprocess_blocks):
@@ -180,14 +212,9 @@ class Encoder(nn.Module):
                     )
                     mult = self.channel_mult * mult
                 else:
-                    arch = self.arch_instance["normal_pre"]
                     num_c = self.num_channels_enc * mult
-                    cell = Cell(
-                        num_c,
-                        num_c,
-                        cell_type="normal_pre",
-                        arch=arch,
-                        use_se=self.use_se,
+                    cell = self._make_normal_cell(
+                        num_c, "normal_pre", self.arch_instance["normal_pre"]
                     )
                 pre_process.append(cell)
         self.mult = mult
@@ -196,10 +223,9 @@ class Encoder(nn.Module):
     def init_encoder_tower(self, mult):
         enc_tower = nn.ModuleList()
         for g in range(self.groups_per_scale):
-            arch = self.arch_instance["normal_enc"]
             num_c = int(self.num_channels_enc * mult)
-            cell = Cell(
-                num_c, num_c, cell_type="normal_enc", arch=arch, use_se=self.use_se
+            cell = self._make_normal_cell(
+                num_c, "normal_enc", self.arch_instance["normal_enc"]
             )
             enc_tower.append(cell)
 
@@ -213,14 +239,12 @@ class Encoder(nn.Module):
         return enc_tower
 
     def init_decoder_tower(self, mult):
-
         dec_tower = nn.ModuleList()
         for g in range(self.groups_per_scale):
             num_c = int(self.num_channels_dec * mult)
             if not (g == 0):
-                arch = self.arch_instance["normal_dec"]
-                cell = Cell(
-                    num_c, num_c, cell_type="normal_dec", arch=arch, use_se=self.use_se
+                cell = self._make_normal_cell(
+                    num_c, "normal_dec", self.arch_instance["normal_dec"]
                 )
                 dec_tower.append(cell)
             cell = DecCombinerCell(
@@ -276,14 +300,9 @@ class Encoder(nn.Module):
                     )
                     mult = mult / self.channel_mult
                 else:
-                    arch = self.arch_instance["normal_post"]
                     num_c = int(self.num_channels_dec * mult)
-                    cell = Cell(
-                        num_c,
-                        num_c,
-                        cell_type="normal_post",
-                        arch=arch,
-                        use_se=self.use_se,
+                    cell = self._make_normal_cell(
+                        num_c, "normal_post", self.arch_instance["normal_post"]
                     )
                 post_process.append(cell)
         self.mult = mult

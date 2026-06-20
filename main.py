@@ -96,6 +96,20 @@ parser.add_argument(
     help="number of channels in latent variables per group",
 )
 
+parser.add_argument(
+    "--use_bimamba",
+    action="store_true",
+    help="Use BI-Mamba CellMamba cells instead of original Conv2D Cell in NVAE normal blocks",
+)
+parser.add_argument(
+    "--bimamba_d_state", type=int, default=8,
+    help="SSM state dimension for BI-Mamba cells (lower = less memory)",
+)
+parser.add_argument(
+    "--bimamba_expand", type=int, default=1,
+    help="Inner expansion factor for BI-Mamba cells (lower = less memory)",
+)
+
 # Training settings
 parser.add_argument(
     "--num_workers", type=int, default=5, help="data loader num workers"
@@ -192,7 +206,8 @@ for idx, file in enumerate(_csv_files):
     )
 
 results = pd.DataFrame(results_rows, columns=["Ticker", "MSE", "StdDev"])
-folder_path = "./results/"
+model_dir = "bi-mamba" if args.use_bimamba else "dva"
+folder_path = "./results/" + model_dir + "/"
 if not os.path.exists(folder_path):
     os.makedirs(folder_path)
 results.to_csv(folder_path + train_setting + ".csv", index=False)
