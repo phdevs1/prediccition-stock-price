@@ -1,16 +1,25 @@
 # -*-Encoding: utf-8 -*-
-import time
-import math
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from .neural_operations import OPS, EncCombinerCell, DecCombinerCell, Conv2D, get_skip_connection
-from .utils import get_stride_for_cell_type, get_input_size, groups_per_scale, get_arch_cells
+from torch.utils.checkpoint import checkpoint
+from .neural_operations import (
+    OPS,
+    EncCombinerCell,
+    DecCombinerCell,
+    Conv2D,
+    get_skip_connection,
+    BNSwishMamba,
+    MambaInvertedResidual,
+)
+from .utils import (
+    get_stride_for_cell_type,
+    get_arch_cells,
+)
 
 
 class Cell(nn.Module):
-    def __init__(self, Cin, Cout, cell_type, arch, use_se):
+    def __init__(self, Cin, Cout, cell_type, arch, use_se, ops_dict=None):
         super(Cell, self).__init__()
         self.cell_type = cell_type
         stride = get_stride_for_cell_type(self.cell_type)
@@ -18,18 +27,18 @@ class Cell(nn.Module):
         self.use_se = use_se
         self._num_nodes = len(arch)
         self._ops = nn.ModuleList()
+        ops = ops_dict if ops_dict is not None else OPS
         for i in range(self._num_nodes):
             stride = get_stride_for_cell_type(self.cell_type) if i == 0 else 1
-            if i==0:
+            if i == 0:
                 primitive = arch[i]
-                op = OPS[primitive](Cin, Cout, stride)
+                op = ops[primitive](Cin, Cout, stride)
             else:
                 primitive = arch[i]
-                op = OPS[primitive](Cout, Cout, stride)
+                op = ops[primitive](Cout, Cout, stride)
             self._ops.append(op)
 
     def forward(self, s):
-        # skip branch
         skip = self.skip(s)
         for i in range(self._num_nodes):
             s = self._ops[i](s)
@@ -37,39 +46,39 @@ class Cell(nn.Module):
 
 
 def soft_clamp5(x: torch.Tensor):
-    return x.div(5.).tanh_().mul(5.)
+    return x.div(5.0).tanh_().mul(5.0)
 
 
 def sample_normal_jit(mu, sigma):
     eps = mu.mul(0).normal_()
-    # print(eps)
     z = eps.mul_(sigma).add_(mu)
-    # print(z.shape)
     return z, eps
 
 
 class Normal:
-    def __init__(self, mu, log_sigma, temp=1.):
+    def __init__(self, mu, log_sigma, temp=1.0):
         self.mu = soft_clamp5(mu)
         log_sigma = soft_clamp5(log_sigma)
         self.sigma = torch.exp(log_sigma)
-        if temp != 1.:
+        if temp != 1.0:
             self.sigma *= temp
 
     def sample(self):
         return sample_normal_jit(self.mu, self.sigma)
 
-    def sample_given_eps(self, eps):
-        return eps * self.sigma + self.mu
-
     def log_p(self, samples):
         normalized_samples = (samples - self.mu) / self.sigma
-        log_p = - 0.5 * normalized_samples * normalized_samples - 0.5 * np.log(2 * np.pi) - torch.log(self.sigma)
+        log_p = (
+            -0.5 * normalized_samples * normalized_samples
+            - 0.5 * np.log(2 * np.pi)
+            - torch.log(self.sigma)
+        )
         return log_p
 
-    def kl(self, normal_dist):
-        term1 = (self.mu - normal_dist.mu) / normal_dist.sigma
-        term2 = self.sigma / normal_dist.sigma
+    def kl(self, prior):
+        """KL(self || prior) por elemento, entre dos Normales (estilo NVAE)."""
+        term1 = (self.mu - prior.mu) / prior.sigma
+        term2 = self.sigma / prior.sigma
         return 0.5 * (term1 * term1 + term2 * term2) - 0.5 - torch.log(term2)
 
 
@@ -77,33 +86,28 @@ class NormalDecoder:
     def __init__(self, param):
         B, C, H, W = param.size()
         self.num_c = C // 2
-        self.mu = param[:, :self.num_c, :, :]                                 # B, 3, H, W
-        self.log_sigma = param[:, self.num_c:, :, :]                          # B, 3, H, W
+        self.mu = param[:, : self.num_c, :, :]  # B, 3, H, W
+        self.log_sigma = param[:, self.num_c :, :, :]  # B, 3, H, W
         self.sigma = torch.exp(self.log_sigma) + 1e-2
         self.dist = Normal(self.mu, self.log_sigma)
 
     def log_prob(self, samples):
         return self.dist.log_p(samples)
 
-    def sample(self,):
+    def sample(
+        self,
+    ):
         x, _ = self.dist.sample()
         return x
-
-
-def log_density_gaussian(sample, mu, logvar):
-    normalization = - 0.5 * (math.log(2 * math.pi) + logvar)
-    inv_var = torch.exp(-logvar)
-    log_density = normalization - 0.5 * ((sample - mu)**2 * inv_var)
-    log_qz = torch.logsumexp(torch.sum(log_density, [2,3]), dim=1, keepdim=False)
-    log_prod_qzi = torch.logsumexp(log_density, dim=1, keepdim=False).sum((1,2))
-    loss_p_z = (log_qz - log_prod_qzi)
-    loss_p_z = ((loss_p_z - torch.min(loss_p_z))/(torch.max(loss_p_z)-torch.min(loss_p_z))).mean()
-    return loss_p_z
 
 
 class Encoder(nn.Module):
     def __init__(self, args):
         super(Encoder, self).__init__()
+
+        # KL latente acumulada en el ultimo forward (por-batch). Se lee desde el
+        # bucle de entrenamiento sin alterar la firma de forward.
+        self.kl_loss = None
 
         self.channel_mult = args.channel_mult
         self.mult = args.mult
@@ -120,53 +124,86 @@ class Encoder(nn.Module):
         self.num_postprocess_blocks = args.num_postprocess_blocks
         self.num_postprocess_cells = args.num_postprocess_cells
         self.use_se = False
+        self.bimamba_d_state = getattr(args, "bimamba_d_state", 8)
+        self.bimamba_expand = getattr(args, "bimamba_expand", 1)
         self.input_size = args.embedding_dimension
         self.hidden_size = args.hidden_size
-        self.projection = nn.Linear(args.embedding_dimension+args.hidden_size, args.target_dim)
+        self.projection = nn.Linear(
+            args.embedding_dimension + args.hidden_size, args.target_dim
+        )
 
-        c_scaling = self.channel_mult ** (self.num_preprocess_blocks) #4
-        spatial_scaling = 2 ** (self.num_preprocess_blocks) #4
+        c_scaling = self.channel_mult ** (self.num_preprocess_blocks)  # 4
+        spatial_scaling = 2 ** (self.num_preprocess_blocks)  # 4
 
-        prior_ftr0_size = (int(c_scaling * self.num_channels_dec), args.prediction_length// spatial_scaling,
-                           (args.embedding_dimension + args.hidden_size + 1) // spatial_scaling)
-        self.prior_ftr0 = nn.Parameter(torch.rand(size=prior_ftr0_size), requires_grad=True)
-        self.z0_size = [self.num_latent_per_group, args.prediction_length // spatial_scaling, (args.embedding_dimension+ args.hidden_size + 1) // spatial_scaling]
+        prior_ftr0_size = (
+            int(c_scaling * self.num_channels_dec),
+            args.prediction_length // spatial_scaling,
+            (args.embedding_dimension + args.hidden_size + 1) // spatial_scaling,
+        )
+        self.prior_ftr0 = nn.Parameter(
+            torch.rand(size=prior_ftr0_size), requires_grad=True
+        )
 
         self.pre_process = self.init_pre_process(args.mult)
         self.enc_tower = self.init_encoder_tower(self.mult)
 
-        self.enc0 = nn.Sequential(nn.ELU(), Conv2D(self.num_channels_enc * self.mult,
-                        self.num_channels_enc * self.mult, kernel_size=1, bias=True), nn.ELU())
+        self.enc0 = nn.Sequential(
+            nn.ELU(),
+            Conv2D(
+                self.num_channels_enc * self.mult,
+                self.num_channels_enc * self.mult,
+                kernel_size=1,
+                bias=True,
+            ),
+            nn.ELU(),
+        )
 
         self.enc_sampler, self.dec_sampler = self.init_sampler(self.mult)
 
         self.dec_tower = self.init_decoder_tower(self.mult)
 
         self.post_process = self.init_post_process(self.mult)
-        self.image_conditional = nn.Sequential(nn.ELU(),
-                             Conv2D(int(self.num_channels_dec * self.mult), 2, 3, padding=1, bias=True))
-        self.rnn = nn.GRU(
-            input_size=args.sequence_length,
-            hidden_size=args.prediction_length,
-            num_layers=args.num_layers,
-            dropout=args.dropout_rate,
-            batch_first=True,
+        self.image_conditional = nn.Sequential(
+            nn.ELU(),
+            Conv2D(int(self.num_channels_dec * self.mult), 2, 3, padding=1, bias=True),
         )
+
+    def _make_normal_cell(self, num_c, cell_type, arch):
+        if any("mamba" in op for op in arch):
+            ops_dict = {
+                **OPS,
+                "mamba_op": lambda Cin, Cout, stride: BNSwishMamba(
+                    Cin, Cout, stride, d_state=self.bimamba_d_state, expand=self.bimamba_expand
+                ),
+                "mamba_dec_op": lambda Cin, Cout, stride: MambaInvertedResidual(
+                    Cin, Cout, stride, d_state=self.bimamba_d_state, expand=self.bimamba_expand
+                ),
+            }
+            return Cell(int(num_c), int(num_c), cell_type=cell_type, arch=arch,
+                        use_se=self.use_se, ops_dict=ops_dict)
+        return Cell(int(num_c), int(num_c), cell_type=cell_type, arch=arch, use_se=self.use_se)
 
     def init_pre_process(self, mult):
         pre_process = nn.ModuleList()
         for b in range(self.num_preprocess_blocks):
             for c in range(self.num_preprocess_cells):
                 if c == self.num_preprocess_cells - 1:
-                    arch = self.arch_instance['down_pre']
+                    arch = self.arch_instance["down_pre"]
                     num_ci = int(self.num_channels_enc * mult)
                     num_co = int(self.channel_mult * num_ci)
-                    cell = Cell(num_ci, num_co, cell_type='down_pre', arch=arch, use_se=self.use_se)
+                    cell = Cell(
+                        num_ci,
+                        num_co,
+                        cell_type="down_pre",
+                        arch=arch,
+                        use_se=self.use_se,
+                    )
                     mult = self.channel_mult * mult
                 else:
-                    arch = self.arch_instance['normal_pre']
                     num_c = self.num_channels_enc * mult
-                    cell = Cell(num_c, num_c, cell_type='normal_pre', arch=arch, use_se=self.use_se)
+                    cell = self._make_normal_cell(
+                        num_c, "normal_pre", self.arch_instance["normal_pre"]
+                    )
                 pre_process.append(cell)
         self.mult = mult
         return pre_process
@@ -174,31 +211,33 @@ class Encoder(nn.Module):
     def init_encoder_tower(self, mult):
         enc_tower = nn.ModuleList()
         for g in range(self.groups_per_scale):
-            arch = self.arch_instance['normal_enc']
             num_c = int(self.num_channels_enc * mult)
-            cell = Cell(num_c, num_c, cell_type='normal_enc', arch=arch, use_se=self.use_se)
+            cell = self._make_normal_cell(
+                num_c, "normal_enc", self.arch_instance["normal_enc"]
+            )
             enc_tower.append(cell)
 
             if not (g == self.groups_per_scale - 1):
                 num_ce = int(self.num_channels_enc * mult)
                 num_cd = int(self.num_channels_dec * mult)
-                cell = EncCombinerCell(num_ce, num_cd, num_ce, cell_type='combiner_enc')
+                cell = EncCombinerCell(num_ce, num_cd, num_ce, cell_type="combiner_enc")
                 enc_tower.append(cell)
 
         self.mult = mult
         return enc_tower
 
     def init_decoder_tower(self, mult):
-
         dec_tower = nn.ModuleList()
         for g in range(self.groups_per_scale):
             num_c = int(self.num_channels_dec * mult)
             if not (g == 0):
-                arch = self.arch_instance['normal_dec']
-                cell = Cell(num_c, num_c, cell_type='normal_dec', arch=arch, use_se=self.use_se)
+                cell = self._make_normal_cell(
+                    num_c, "normal_dec", self.arch_instance["normal_dec"]
+                )
                 dec_tower.append(cell)
-            #print(num_c)
-            cell = DecCombinerCell(num_c, self.num_latent_per_group, num_c, cell_type='combiner_dec')
+            cell = DecCombinerCell(
+                num_c, self.num_latent_per_group, num_c, cell_type="combiner_dec"
+            )
             dec_tower.append(cell)
         self.mult = mult
         return dec_tower
@@ -208,15 +247,28 @@ class Encoder(nn.Module):
         dec_sampler = nn.ModuleList()
         for g in range(self.groups_per_scale):
             num_c = int(self.num_channels_enc * mult)
-            cell = Conv2D(num_c, 2 * self.num_latent_per_group, kernel_size=3, padding=1, bias=True)
+            cell = Conv2D(
+                num_c,
+                2 * self.num_latent_per_group,
+                kernel_size=3,
+                padding=1,
+                bias=True,
+            )
             enc_sampler.append(cell)
             if g != 0:
                 num_c = int(self.num_channels_dec * mult)
                 cell = nn.Sequential(
                     nn.ELU(),
-                    Conv2D(num_c, 2 * self.num_latent_per_group, kernel_size=1, padding=0, bias=True))
+                    Conv2D(
+                        num_c,
+                        2 * self.num_latent_per_group,
+                        kernel_size=1,
+                        padding=0,
+                        bias=True,
+                    ),
+                )
                 dec_sampler.append(cell)
-        mult = mult/self.channel_mult
+        mult = mult / self.channel_mult
         return enc_sampler, dec_sampler
 
     def init_post_process(self, mult):
@@ -224,56 +276,68 @@ class Encoder(nn.Module):
         for b in range(self.num_postprocess_blocks):
             for c in range(self.num_postprocess_cells):
                 if c == 0:
-                    arch = self.arch_instance['up_post']
+                    arch = self.arch_instance["up_post"]
                     num_ci = int(self.num_channels_dec * mult)
                     num_co = int(num_ci / self.channel_mult)
-                    cell = Cell(num_ci, num_co, cell_type='up_post', arch=arch, use_se=self.use_se)
+                    cell = Cell(
+                        num_ci,
+                        num_co,
+                        cell_type="up_post",
+                        arch=arch,
+                        use_se=self.use_se,
+                    )
                     mult = mult / self.channel_mult
                 else:
-                    arch = self.arch_instance['normal_post']
                     num_c = int(self.num_channels_dec * mult)
-                    cell = Cell(num_c, num_c, cell_type='normal_post', arch=arch, use_se=self.use_se)
+                    cell = self._make_normal_cell(
+                        num_c, "normal_post", self.arch_instance["normal_post"]
+                    )
                 post_process.append(cell)
         self.mult = mult
         return post_process
 
     def forward(self, x):
-        s = self.stem(2 * x - 1.0)
+        s = self.stem(x)
         for cell in self.pre_process:
             s = cell(s)
         combiner_cells_enc = []
         combiner_cells_s = []
-        all_z = []
+        kl_all = []
         for cell in self.enc_tower:
-            if cell.cell_type == 'combiner_enc':
+            if cell.cell_type == "combiner_enc":
                 combiner_cells_enc.append(cell)
                 combiner_cells_s.append(s)
             else:
                 s = cell(s)
         combiner_cells_enc.reverse()
         combiner_cells_s.reverse()
-        idx_dec = 0
-        ftr = self.enc0(s)   #conv
-        param0 = self.enc_sampler[idx_dec](ftr) # another conv2d
+
+        ftr = self.enc0(s)
+        param0 = self.enc_sampler[0](ftr)
         mu_q, log_sig_q = torch.chunk(param0, 2, dim=1)
         dist = Normal(mu_q, log_sig_q)
-        z, _ = dist.sample()   #z_0
-        all_z.append(z)
-        idx_dec = 0
-        s = self.prior_ftr0.unsqueeze(0) # random value
-        batch_size = z.size(0)
-        s = s.expand(batch_size, -1, -1, -1)
+        z, _ = dist.sample()
+        prior0 = Normal(torch.zeros_like(mu_q), torch.zeros_like(log_sig_q))
+        kl_all.append(torch.sum(dist.kl(prior0), dim=[1, 2, 3]))
+
+        s = self.prior_ftr0.unsqueeze(0).expand(z.size(0), -1, -1, -1)
         idx_dec = 0
         for cell in self.dec_tower:
-            if cell.cell_type == 'combiner_dec':
+            if cell.cell_type == "combiner_dec":
                 if idx_dec > 0:
-                    ftr = combiner_cells_enc[idx_dec - 1](combiner_cells_s[idx_dec - 1], s)
+                    # Prior p(z_n) a partir de las features del decoder (dec_sampler)
+                    prior_param = self.dec_sampler[idx_dec - 1](s)
+                    mu_p, log_sig_p = torch.chunk(prior_param, 2, dim=1)
+                    prior = Normal(mu_p, log_sig_p)
+                    # Posterior q(z_n) a partir de las features del encoder combinadas
+                    ftr = combiner_cells_enc[idx_dec - 1](
+                        combiner_cells_s[idx_dec - 1], s
+                    )
                     param = self.enc_sampler[idx_dec](ftr)
                     mu_q, log_sig_q = torch.chunk(param, 2, dim=1)
                     dist = Normal(mu_q, log_sig_q)
-                    z, _ = dist.sample()    # z_n
-                    all_z.append(z)
-                    #print(z.shape)
+                    z, _ = dist.sample()
+                    kl_all.append(torch.sum(dist.kl(prior), dim=[1, 2, 3]))
                 s = cell(s, z)
                 idx_dec += 1
             else:
@@ -281,9 +345,10 @@ class Encoder(nn.Module):
 
         for cell in self.post_process:
             s = cell(s)
-        # print(s.shape)
         logits = self.image_conditional(s)
-        logits = self.projection(logits[...,-(self.input_size + self.hidden_size):])
+        logits = self.projection(logits[..., -(self.input_size + self.hidden_size) :])
+
+        self.kl_loss = torch.stack(kl_all, dim=0).sum(dim=0)
         return logits
 
     def decoder_output(self, logits):
