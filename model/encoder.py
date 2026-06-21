@@ -9,16 +9,17 @@ from .neural_operations import (
     DecCombinerCell,
     Conv2D,
     get_skip_connection,
+    BNSwishMamba,
+    MambaInvertedResidual,
 )
 from .utils import (
     get_stride_for_cell_type,
     get_arch_cells,
 )
-from samba.models import BIMambaCell
 
 
 class Cell(nn.Module):
-    def __init__(self, Cin, Cout, cell_type, arch, use_se):
+    def __init__(self, Cin, Cout, cell_type, arch, use_se, ops_dict=None):
         super(Cell, self).__init__()
         self.cell_type = cell_type
         stride = get_stride_for_cell_type(self.cell_type)
@@ -26,40 +27,22 @@ class Cell(nn.Module):
         self.use_se = use_se
         self._num_nodes = len(arch)
         self._ops = nn.ModuleList()
+        ops = ops_dict if ops_dict is not None else OPS
         for i in range(self._num_nodes):
             stride = get_stride_for_cell_type(self.cell_type) if i == 0 else 1
             if i == 0:
                 primitive = arch[i]
-                op = OPS[primitive](Cin, Cout, stride)
+                op = ops[primitive](Cin, Cout, stride)
             else:
                 primitive = arch[i]
-                op = OPS[primitive](Cout, Cout, stride)
+                op = ops[primitive](Cout, Cout, stride)
             self._ops.append(op)
 
     def forward(self, s):
-        # skip branch
         skip = self.skip(s)
         for i in range(self._num_nodes):
             s = self._ops[i](s)
         return skip + 0.1 * s
-
-
-class CellMamba(nn.Module):
-    """Drop-in replacement for normal (stride=1) Cell using BI-Mamba.
-
-    Only valid for cell types where Cin == Cout (normal_pre, normal_enc,
-    normal_dec, normal_post). Down/up cells must remain as Cell.
-    """
-
-    def __init__(self, C, cell_type, d_state: int = 8, expand: int = 1):
-        super(CellMamba, self).__init__()
-        self.cell_type = cell_type
-        self.bi_mamba = BIMambaCell(C, d_state=d_state, expand=expand)
-
-    def forward(self, s):
-        # Gradient checkpointing: recompute activations in backward instead of
-        # storing them, trading compute for memory on the large B*W effective batch.
-        return s + 0.1 * checkpoint(self.bi_mamba, s, use_reentrant=False)
 
 
 def soft_clamp5(x: torch.Tensor):
@@ -141,7 +124,6 @@ class Encoder(nn.Module):
         self.num_postprocess_blocks = args.num_postprocess_blocks
         self.num_postprocess_cells = args.num_postprocess_cells
         self.use_se = False
-        self.use_bimamba = getattr(args, "use_bimamba", False)
         self.bimamba_d_state = getattr(args, "bimamba_d_state", 8)
         self.bimamba_expand = getattr(args, "bimamba_expand", 1)
         self.input_size = args.embedding_dimension
@@ -187,13 +169,19 @@ class Encoder(nn.Module):
         )
 
     def _make_normal_cell(self, num_c, cell_type, arch):
-        if self.use_bimamba:
-            return CellMamba(
-                int(num_c), cell_type,
-                d_state=self.bimamba_d_state,
-                expand=self.bimamba_expand,
-            )
-        return Cell(num_c, num_c, cell_type=cell_type, arch=arch, use_se=self.use_se)
+        if any("mamba" in op for op in arch):
+            ops_dict = {
+                **OPS,
+                "mamba_op": lambda Cin, Cout, stride: BNSwishMamba(
+                    Cin, Cout, stride, d_state=self.bimamba_d_state, expand=self.bimamba_expand
+                ),
+                "mamba_dec_op": lambda Cin, Cout, stride: MambaInvertedResidual(
+                    Cin, Cout, stride, d_state=self.bimamba_d_state, expand=self.bimamba_expand
+                ),
+            }
+            return Cell(int(num_c), int(num_c), cell_type=cell_type, arch=arch,
+                        use_se=self.use_se, ops_dict=ops_dict)
+        return Cell(int(num_c), int(num_c), cell_type=cell_type, arch=arch, use_se=self.use_se)
 
     def init_pre_process(self, mult):
         pre_process = nn.ModuleList()

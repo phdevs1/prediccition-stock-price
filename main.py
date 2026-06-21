@@ -51,12 +51,6 @@ parser.add_argument("--beta_end", type=float, default=0.1, help="end of the beta
 parser.add_argument("--scale", type=float, default=0.1, help="adjust diffusion scale")
 
 # Bidirectional VAE
-parser.add_argument(
-    "--arch_instance",
-    type=str,
-    default="res_mbconv",
-    help="path to the architecture instance",
-)
 parser.add_argument("--mult", type=float, default=1, help="mult of channels")
 parser.add_argument("--num_layers", type=int, default=2, help="num of RNN layers")
 parser.add_argument(
@@ -99,15 +93,15 @@ parser.add_argument(
 parser.add_argument(
     "--use_bimamba",
     action="store_true",
-    help="Use BI-Mamba CellMamba cells instead of original Conv2D Cell in NVAE normal blocks",
+    help="Usa celdas BI-Mamba en el NVAE (arch_instance=mamba_enc)",
 )
 parser.add_argument(
     "--bimamba_d_state", type=int, default=8,
-    help="SSM state dimension for BI-Mamba cells (lower = less memory)",
+    help="SSM state dimension para celdas BI-Mamba",
 )
 parser.add_argument(
     "--bimamba_expand", type=int, default=1,
-    help="Inner expansion factor for BI-Mamba cells (lower = less memory)",
+    help="Factor de expansion interna para celdas BI-Mamba",
 )
 
 # Training settings
@@ -164,6 +158,7 @@ parser.add_argument(
 )
 
 args = parser.parse_args()
+args.arch_instance = "mamba_enc" if args.use_bimamba else "res_mbconv"
 
 _csv_files = sorted(f for f in os.listdir(args.root_path) if f.endswith(".csv"))
 args.input_dim = Dataset_Custom.feature_dim(args.root_path, _csv_files[0]) if _csv_files else 5
@@ -180,28 +175,31 @@ results_rows = []
 train_setting = "tp{}_sl{}".format(
     args.root_path.split(os.sep)[-1], args.sequence_length
 )
+all_mse = {f: [] for f in _csv_files}
 
-for idx, file in enumerate(_csv_files):
-    print("\n\nRunning on file {} ({}/{})...".format(file, idx + 1, len(_csv_files)))
-    args.data_path = file
+for itr_idx in range(args.itr):
+    print("\n\n>>>>>>> itr {}/{} — training on {} assets >>>>>>>".format(
+        itr_idx + 1, args.itr, len(_csv_files)
+    ))
+    exp = Exp_Model(args)
+    exp.train(train_setting, _csv_files)
+
+    for file in _csv_files:
+        args.data_path = file
+        test_setting = file + "_" + train_setting
+        print(">>>>>>>start testing : {}>>>>>>>>>>>>>>>>>>>>>>>>>>".format(test_setting))
+        mse = exp.test(test_setting)
+        all_mse[file].append(mse)
+
+    torch.cuda.empty_cache()
+
+for file in _csv_files:
     ticker = os.path.splitext(file)[0]
-    all_mse = []
-
-    for _ in range(args.itr):
-        setting = args.data_path + "_" + train_setting
-        exp = Exp_Model(args)
-        print(">>>>>>>start training : {}>>>>>>>>>>>>>>>>>>>>>>>>>>".format(setting))
-        exp.train(setting)
-        print(">>>>>>>start testing : {}>>>>>>>>>>>>>>>>>>>>>>>>>>".format(setting))
-        mse = exp.test(setting)
-        all_mse.append(mse)
-        torch.cuda.empty_cache()
-
     results_rows.append(
         {
             "Ticker": ticker,
-            "MSE": np.mean(np.array(all_mse)),
-            "StdDev": np.std(np.array(all_mse)),
+            "MSE": np.mean(all_mse[file]),
+            "StdDev": np.std(all_mse[file]),
         }
     )
 

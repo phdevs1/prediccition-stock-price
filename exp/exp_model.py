@@ -7,7 +7,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch import optim
-from torch.utils.data import DataLoader
+from torch.utils.data import ConcatDataset, DataLoader
 
 import os
 import warnings
@@ -69,6 +69,28 @@ class Exp_Model(object):
 
         return data_set, data_loader
 
+    def _get_combined_data(self, flag, csv_files):
+        args = self.args
+        datasets = [
+            Dataset_Custom(
+                root_path=args.root_path,
+                data_path=f,
+                flag=flag,
+                size=[args.sequence_length, args.prediction_length],
+            )
+            for f in csv_files
+        ]
+        combined = ConcatDataset(datasets)
+        print(flag, len(combined))
+        loader = DataLoader(
+            combined,
+            batch_size=args.batch_size,
+            shuffle=(flag == "train"),
+            num_workers=args.num_workers,
+            drop_last=True,
+        )
+        return combined, loader
+
     def _select_optimizer(self):
         denoise_optim = optim.Adam(
             self.denoise_net.parameters(),
@@ -100,9 +122,13 @@ class Exp_Model(object):
         total_mse = np.average(total_mse)
         return total_mse
 
-    def train(self, setting):
-        train_data, train_loader = self._get_data(flag="train")
-        vali_data, vali_loader = self._get_data(flag="val")
+    def train(self, setting, csv_files=None):
+        if csv_files:
+            train_data, train_loader = self._get_combined_data("train", csv_files)
+            vali_data, vali_loader = self._get_combined_data("val", csv_files)
+        else:
+            train_data, train_loader = self._get_data(flag="train")
+            vali_data, vali_loader = self._get_data(flag="val")
         train_steps = len(train_loader)
         path = os.path.join(self.args.checkpoints, setting)
         if not os.path.exists(path):

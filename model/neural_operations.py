@@ -4,6 +4,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.modules.batchnorm import _BatchNorm
 from collections import OrderedDict
+from torch.utils.checkpoint import checkpoint
+from samba.models import BIMambaCell
 
 
 BN_EPS = 1e-5
@@ -313,3 +315,36 @@ class InvertedResidual(nn.Module):
 
     def forward(self, x):
         return self.conv(x)
+
+
+class BNSwishMamba(nn.Module):
+    """LayerNorm → BI-Mamba (LN vive dentro de BIMambaCell).
+    Sin BN+Swish externo: evita doble normalización incompatible con SSM."""
+
+    def __init__(self, Cin, Cout, stride, d_state=8, expand=1):
+        super().__init__()
+        self.bi_mamba = BIMambaCell(Cin, d_state=d_state, expand=expand)
+
+    def forward(self, x):
+        return checkpoint(self.bi_mamba, x, use_reentrant=False)
+
+
+class MambaInvertedResidual(nn.Module):
+    """BN → Conv1×1+BN+Swish → BI-Mamba → Conv1×1 → BN.
+    Reemplaza InvertedResidual en celdas normales del decoder."""
+
+    def __init__(self, Cin, Cout, stride, ex=6, d_state=8, expand=1):
+        super().__init__()
+        hidden_dim = int(round(Cin * ex))
+        self.bn1 = get_batchnorm(Cin, eps=BN_EPS, momentum=0.05)
+        self.expand_conv = ConvBNSwish(Cin, hidden_dim, k=1)
+        self.bi_mamba = BIMambaCell(hidden_dim, d_state=d_state, expand=expand)
+        self.contract_conv = Conv2D(hidden_dim, Cout, 1, 1, 0, bias=False, weight_norm=False)
+        self.bn2 = get_batchnorm(Cout, momentum=0.05)
+
+    def forward(self, x):
+        out = self.bn1(x)
+        out = self.expand_conv(out)
+        out = checkpoint(self.bi_mamba, out, use_reentrant=False)
+        out = self.contract_conv(out)
+        return self.bn2(out)

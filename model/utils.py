@@ -23,6 +23,16 @@ def get_arch_cells(arch_type):
         arch_cells["down_pre"] = ["res_bnswish", "res_bnswish"]
         arch_cells["normal_post"] = ["mconv_e3k5g0"]
         arch_cells["up_post"] = ["mconv_e3k5g0"]
+    elif arch_type == "mamba_enc":
+        arch_cells = dict()
+        arch_cells["normal_enc"] = ["mamba_op", "mamba_op"]
+        arch_cells["down_enc"] = ["res_bnswish", "res_bnswish"]
+        arch_cells["normal_dec"] = ["mamba_dec_op"]
+        arch_cells["up_dec"] = ["mconv_e6k5g0"]
+        arch_cells["normal_pre"] = ["res_bnswish", "res_bnswish"]
+        arch_cells["down_pre"] = ["res_bnswish", "res_bnswish"]
+        arch_cells["normal_post"] = ["mconv_e3k5g0"]
+        arch_cells["up_post"] = ["mconv_e3k5g0"]
     else:
         raise NotImplementedError
     return arch_cells
