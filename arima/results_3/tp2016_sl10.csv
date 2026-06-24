@@ -1,3 +1,0 @@
-Ticker,MSE,StdDev,ARIMA_order
-AMZN_processed,0.864242998858933,0.0,"(1, 0, 0)"
-GOOGL_processed,0.9112300269012227,0.0,"(1, 0, 0)"
